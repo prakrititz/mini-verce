@@ -38,7 +38,7 @@ Before using the CLI, ensure you have the following installed and running on you
 
 ---
 
-## Available Commands (Stages 1 & 2)
+## Available Commands (Stages 1, 2 & 3)
 
 Currently, the CLI supports the following workflow:
 
@@ -56,11 +56,22 @@ Registers the current working directory as a project in the database.
 
 ### `mini-vercel deploy`
 Manually triggers a build and deployment for the current directory.
-1. Reads the local `Dockerfile`.
+1. **Zero-Config Framework Auto-Detection**: Inspects `package.json` and optionally `minivercel.json` to detect Next.js, Vite, Create React App, or generic Node.js apps. If a `Dockerfile` or `.dockerignore` is missing, optimized standalone or multi-stage assets are automatically written to the root directory.
 2. Packages the directory and builds the Docker image.
-3. Finds a random available host port and starts the container.
+3. Finds a random available host port and starts the new container.
 4. Dynamically updates the `Caddyfile` and executes `caddy reload` for a seamless blue-green deployment.
-5. Proxies the app to `http://<project-name>.localhost:8080`.
+5. **Graceful Cleanup**: Gracefully shuts down and removes previous running containers for the project to free up host resources immediately with zero downtime.
+6. Proxies the app to `http://<project-name>.localhost:8080`.
+
+### Custom Configuration (`minivercel.json`)
+You can place a `minivercel.json` file in your project root to override auto-detection defaults:
+```json
+{
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "outputDirectory": "dist"
+}
+```
 
 ### `mini-vercel list`
 Queries the database and prints a formatted table of all active projects, their statuses, and their local URLs.
@@ -72,7 +83,7 @@ Queries the database and prints a formatted table of all active projects, their 
 This project is being built in stages:
 - [x] **Stage 1: Foundation & Core CLI** (SQLite, Base CLI commands)
 - [x] **Stage 2: Basic Deployment Engine** (Dockerode integration, Caddy proxy container)
-- [ ] **Stage 3: Zero-Config Framework Detection** (Auto-generating Dockerfiles for Next.js, Vite, Node)
+- [x] **Stage 3: Zero-Config Framework Detection** (Auto-generating Dockerfiles for Next.js, Vite, Node)
 - [ ] **Stage 4: Continuous Delivery** (GitHub Webhooks & FIFO Build Queue)
 - [ ] **Stage 5: Environment Variables & Logs** (Managing secrets)
 - [ ] **Stage 6: Advanced PaaS Features** (Rollbacks, PR Previews, Custom Domains)

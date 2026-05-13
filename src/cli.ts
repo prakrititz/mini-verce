@@ -6,8 +6,9 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { initDB, run, get, all } from './db';
-import { buildImage, startContainer } from './docker';
+import { buildImage, startContainer, stopContainer } from './docker';
 import { startCaddy, generateAndReload } from './caddy';
+import { ensureDockerAssets } from './frameworks';
 
 const program = new Command();
 program
@@ -91,11 +92,8 @@ program
       process.exit(1);
     }
     
-    // 2. Ensure Dockerfile exists
-    if (!fs.existsSync(path.join(cwd, 'Dockerfile'))) {
-      console.error('Error: No Dockerfile found in current directory.');
-      process.exit(1);
-    }
+    // 2. Ensure Docker assets exist via framework auto-detection
+    ensureDockerAssets(cwd);
     
     try {
       // 3. Find available port
@@ -122,6 +120,21 @@ program
       // 7. Update Caddy
       console.log('Updating proxy routing...');
       await generateAndReload();
+
+      // 8. Blue-Green cleanup: gracefully stop and remove previous running containers
+      console.log('Performing blue-green deployment cleanup...');
+      const oldDeployments = await all(
+        'SELECT * FROM deployments WHERE project_id = ? AND status = ? AND id != ?',
+        [project.id, 'running', deploymentId]
+      );
+
+      for (const oldDep of oldDeployments) {
+        if (oldDep.container_id) {
+          console.log(`Stopping previous container: ${oldDep.container_id}`);
+          await stopContainer(oldDep.container_id);
+        }
+        await run('UPDATE deployments SET status = ? WHERE id = ?', ['stopped', oldDep.id]);
+      }
       
       console.log(`🚀 Deployed successfully!`);
       console.log(`URL: http://${project.name}.localhost:8080`);
