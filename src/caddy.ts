@@ -56,21 +56,46 @@ export async function startCaddy(): Promise<void> {
 }
 
 export async function generateCaddyfile(): Promise<void> {
-  const projects = await all(`
+  // Fetch active production deployments
+  const prodDeployments = await all(`
     SELECT p.name, d.port 
     FROM projects p
     JOIN deployments d ON p.id = d.project_id
     WHERE d.status = 'running'
+    AND (d.env = 'production' OR d.env IS NULL)
     AND d.created_at = (
-      SELECT MAX(created_at) FROM deployments WHERE project_id = p.id AND status = 'running'
+      SELECT MAX(created_at) FROM deployments 
+      WHERE project_id = p.id AND status = 'running' AND (env = 'production' OR env IS NULL)
+    )
+  `);
+
+  // Fetch active preview deployments grouped by unique preview URL
+  const previewDeployments = await all(`
+    SELECT d.url, d.port
+    FROM deployments d
+    WHERE d.status = 'running'
+    AND d.env = 'preview'
+    AND d.url IS NOT NULL
+    AND d.created_at = (
+      SELECT MAX(created_at) FROM deployments d2
+      WHERE d2.url = d.url AND d2.status = 'running' AND d2.env = 'preview'
     )
   `);
 
   let caddyConfig = '';
-  for (const proj of projects) {
+
+  for (const dep of prodDeployments) {
     caddyConfig += `
-http://${proj.name}.localhost:${HTTP_PORT} {
-  reverse_proxy host.docker.internal:${proj.port}
+http://${dep.name}.localhost:${HTTP_PORT} {
+  reverse_proxy host.docker.internal:${dep.port}
+}
+`;
+  }
+
+  for (const dep of previewDeployments) {
+    caddyConfig += `
+http://${dep.url}:${HTTP_PORT} {
+  reverse_proxy host.docker.internal:${dep.port}
 }
 `;
   }

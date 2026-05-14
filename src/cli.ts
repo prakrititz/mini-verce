@@ -9,6 +9,7 @@ import { initDB, run, get, all } from './db';
 import { buildImage, startContainer, stopContainer } from './docker';
 import { startCaddy, generateAndReload } from './caddy';
 import { ensureDockerAssets } from './frameworks';
+import { deployProject } from './deployer';
 
 const program = new Command();
 program
@@ -85,59 +86,18 @@ program
     await initDB();
     const cwd = process.cwd();
     
-    // 1. Find project
     const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
     if (!project) {
       console.error('Error: Project not found. Run "mini-vercel link" first.');
       process.exit(1);
     }
     
-    // 2. Ensure Docker assets exist via framework auto-detection
-    ensureDockerAssets(cwd);
-    
     try {
-      // 3. Find available port
-      const getPort = (await import('get-port')).default;
-      const port = await getPort();
-      
-      const imageName = `mini-vercel-${project.name}:${Date.now()}`;
-      const containerName = `mini-vercel-app-${project.name}-${Date.now()}`;
-      
-      // 4. Build image
-      await buildImage(cwd, imageName);
-      
-      // 5. Start container
-      console.log(`Starting container on port ${port}...`);
-      const containerId = await startContainer(imageName, port, containerName);
-      
-      // 6. Record deployment
-      const deploymentId = uuidv4();
-      await run(
-        'INSERT INTO deployments (id, project_id, status, container_id, port) VALUES (?, ?, ?, ?, ?)',
-        [deploymentId, project.id, 'running', containerId, port]
-      );
-      
-      // 7. Update Caddy
-      console.log('Updating proxy routing...');
-      await generateAndReload();
-
-      // 8. Blue-Green cleanup: gracefully stop and remove previous running containers
-      console.log('Performing blue-green deployment cleanup...');
-      const oldDeployments = await all(
-        'SELECT * FROM deployments WHERE project_id = ? AND status = ? AND id != ?',
-        [project.id, 'running', deploymentId]
-      );
-
-      for (const oldDep of oldDeployments) {
-        if (oldDep.container_id) {
-          console.log(`Stopping previous container: ${oldDep.container_id}`);
-          await stopContainer(oldDep.container_id);
-        }
-        await run('UPDATE deployments SET status = ? WHERE id = ?', ['stopped', oldDep.id]);
-      }
-      
-      console.log(`🚀 Deployed successfully!`);
-      console.log(`URL: http://${project.name}.localhost:8080`);
+      await deployProject({
+        project,
+        sourcePath: cwd,
+        env: 'production'
+      });
     } catch (err: any) {
       console.error('Deployment failed:', err);
     }

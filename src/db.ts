@@ -57,10 +57,21 @@ export async function initDB() {
       status TEXT,
       container_id TEXT,
       port INTEGER,
+      env TEXT DEFAULT 'production',
+      url TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(project_id) REFERENCES projects(id)
     )
   `);
+
+  // Perform safe schema migrations if the table already existed without these columns
+  try {
+    await run("ALTER TABLE deployments ADD COLUMN env TEXT DEFAULT 'production'");
+  } catch (_) {}
+
+  try {
+    await run("ALTER TABLE deployments ADD COLUMN url TEXT");
+  } catch (_) {}
 
   await run(`
     CREATE TABLE IF NOT EXISTS env_vars (
