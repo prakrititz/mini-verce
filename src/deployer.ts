@@ -35,6 +35,16 @@ export async function deployProject(options: DeployOptions): Promise<DeployResul
   // 1. Ensure optimized Docker assets exist for the framework
   ensureDockerAssets(sourcePath);
 
+  // Fetch environment variables for the project
+  const envVarsRows = await all('SELECT key, value FROM env_vars WHERE project_id = ?', [project.id]);
+  const buildargs: Record<string, string> = {};
+  const containerEnv: string[] = [];
+
+  for (const row of envVarsRows) {
+    buildargs[row.key] = row.value;
+    containerEnv.push(`${row.key}=${row.value}`);
+  }
+
   // 2. Find an available port dynamically
   const getPort = (await import('get-port')).default;
   const port = await getPort();
@@ -45,11 +55,11 @@ export async function deployProject(options: DeployOptions): Promise<DeployResul
   const containerName = `mini-vercel-app-${project.name}-${safeEnv}-${timestamp}`;
 
   // 3. Build Docker image
-  await buildImage(sourcePath, imageName);
+  await buildImage(sourcePath, imageName, buildargs);
 
   // 4. Start Docker container
   console.log(`Starting container ${containerName} on port ${port}...`);
-  const containerId = await startContainer(imageName, port, containerName);
+  const containerId = await startContainer(imageName, port, containerName, containerEnv);
 
   // 5. Record deployment in the database
   const deploymentId = uuidv4();

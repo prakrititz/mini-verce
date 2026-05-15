@@ -6,7 +6,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { initDB, run, get, all } from './db';
-import { buildImage, startContainer, stopContainer } from './docker';
+import { buildImage, startContainer, stopContainer, printContainerLogs } from './docker';
 import { startCaddy, generateAndReload } from './caddy';
 import { ensureDockerAssets } from './frameworks';
 import { deployProject } from './deployer';
@@ -123,6 +123,110 @@ program
       Status: p.status || 'No Deployments',
       URL: p.status === 'running' ? `http://${p.name}.localhost:8080` : 'N/A'
     })));
+  });
+
+const envCmd = program
+  .command('env')
+  .description('Manage environment variables for the current project');
+
+envCmd
+  .command('add <key> <value>')
+  .description('Add or update an environment variable')
+  .action(async (key, value) => {
+    await initDB();
+    const cwd = process.cwd();
+    const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
+    if (!project) {
+      console.error('Error: Project not found. Run "mini-vercel link" first.');
+      process.exit(1);
+    }
+
+    const id = uuidv4();
+    try {
+      await run(
+        'INSERT INTO env_vars (id, project_id, key, value) VALUES (?, ?, ?, ?) ON CONFLICT(project_id, key) DO UPDATE SET value = excluded.value',
+        [id, project.id, key, value]
+      );
+      console.log(`Environment variable ${key} added successfully to project "${project.name}".`);
+    } catch (err: any) {
+      console.error('Failed to add environment variable:', err);
+    }
+  });
+
+envCmd
+  .command('rm <key>')
+  .description('Remove an environment variable')
+  .action(async (key) => {
+    await initDB();
+    const cwd = process.cwd();
+    const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
+    if (!project) {
+      console.error('Error: Project not found.');
+      process.exit(1);
+    }
+
+    await run('DELETE FROM env_vars WHERE project_id = ? AND key = ?', [project.id, key]);
+    console.log(`Environment variable ${key} removed from project "${project.name}".`);
+  });
+
+envCmd
+  .command('pull')
+  .description('Pull environment variables to a local .env file')
+  .action(async () => {
+    await initDB();
+    const cwd = process.cwd();
+    const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
+    if (!project) {
+      console.error('Error: Project not found.');
+      process.exit(1);
+    }
+
+    const envVars = await all('SELECT key, value FROM env_vars WHERE project_id = ?', [project.id]);
+    if (envVars.length === 0) {
+      console.log('No environment variables found for this project.');
+      return;
+    }
+    
+    const envContent = envVars.map(row => `${row.key}=${row.value}`).join('\n');
+    fs.writeFileSync(path.join(cwd, '.env'), envContent);
+    console.log(`Successfully pulled ${envVars.length} environment variables to .env file.`);
+  });
+
+program
+  .command('logs [project-name]')
+  .description('View logs for a deployed project')
+  .option('-f, --follow', 'Follow log output')
+  .action(async (projectName, options) => {
+    await initDB();
+    
+    let queryProject;
+    if (projectName) {
+      queryProject = await get('SELECT * FROM projects WHERE name = ?', [projectName]);
+    } else {
+      queryProject = await get('SELECT * FROM projects WHERE path = ?', [process.cwd()]);
+    }
+
+    if (!queryProject) {
+      console.error('Error: Project not found.');
+      process.exit(1);
+    }
+
+    const latestDeployment = await get(
+      'SELECT container_id FROM deployments WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
+      [queryProject.id, 'running']
+    );
+
+    if (!latestDeployment || !latestDeployment.container_id) {
+      console.error(`Error: No running deployment found for project "${queryProject.name}".`);
+      process.exit(1);
+    }
+
+    console.log(`Fetching logs for project "${queryProject.name}" (Container: ${latestDeployment.container_id.substring(0, 12)})...`);
+    try {
+      await printContainerLogs(latestDeployment.container_id, options.follow);
+    } catch (err: any) {
+      console.error('Failed to fetch logs:', err);
+    }
   });
 
 program.parse(process.argv);

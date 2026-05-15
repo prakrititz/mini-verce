@@ -73,6 +73,19 @@ You can place a `minivercel.json` file in your project root to override auto-det
 }
 ```
 
+### `mini-vercel env add <key> <value>`
+Securely store an environment variable for the linked project in the SQLite database.
+
+### `mini-vercel env rm <key>`
+Remove a stored environment variable.
+
+### `mini-vercel env pull`
+Query the database and write all stored environment variables to a `.env` file in the current project directory.
+
+### `mini-vercel logs [project-name]`
+View the recent stdout/stderr logs from the running project container.
+- `-f, --follow`: Stream live log output continuously to your terminal.
+
 ### `mini-vercel list`
 Queries the database and prints a formatted table of all active projects, their statuses, and their local URLs.
 
@@ -84,6 +97,6 @@ This project is being built in stages:
 - [x] **Stage 1: Foundation & Core CLI** (SQLite, Base CLI commands)
 - [x] **Stage 2: Basic Deployment Engine** (Dockerode integration, Caddy proxy container)
 - [x] **Stage 3: Zero-Config Framework Detection** (Auto-generating Dockerfiles for Next.js, Vite, Node)
-- [ ] **Stage 4: Continuous Delivery** (GitHub Webhooks & FIFO Build Queue)
-- [ ] **Stage 5: Environment Variables & Logs** (Managing secrets)
+- [x] **Stage 4: Continuous Delivery** (GitHub Webhooks & FIFO Build Queue)
+- [x] **Stage 5: Environment Variables & Logs** (Managing secrets)
 - [ ] **Stage 6: Advanced PaaS Features** (Rollbacks, PR Previews, Custom Domains)
