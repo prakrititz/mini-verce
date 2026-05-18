@@ -15,7 +15,7 @@ import { initDB, all, get, run } from './db';
 import { buildQueue } from './queue';
 import { deployProject } from './deployer';
 import { stopContainer } from './docker';
-import { generateAndReload } from './caddy';
+import { generateAndReload, getCaddyMode, trustLocalCA } from './caddy';
 
 const execAsync = util.promisify(exec);
 
@@ -35,6 +35,38 @@ app.get('/health', (_req, res) => {
 
 app.get('/api/queue', (_req, res) => {
   res.json({ length: buildQueue.getLength(), isBusy: buildQueue.isBusy() });
+});
+
+// ── Phase 5: Caddy mode & trust endpoints (public — no auth needed) ───────────
+
+/**
+ * GET /api/caddy/mode
+ * Returns the current Caddy TLS mode (local | public).
+ */
+app.get('/api/caddy/mode', (_req, res) => {
+  res.json({
+    mode: getCaddyMode(),
+    description: getCaddyMode() === 'local'
+      ? 'Caddy local CA — tls internal (set CADDY_MODE=public for Let\'s Encrypt)'
+      : 'Let\'s Encrypt — bare hostnames, auto TLS',
+    httpPort:  process.env.CADDY_HTTP_PORT  || 80,
+    httpsPort: process.env.CADDY_HTTPS_PORT || 443,
+  });
+});
+
+/**
+ * POST /api/caddy/trust
+ * Runs `caddy trust` inside the Caddy container to install the local CA.
+ * Only meaningful in local mode. Safe to call multiple times.
+ */
+app.post('/api/caddy/trust', async (_req, res) => {
+  try {
+    const output = await trustLocalCA();
+    console.log('[Caddy] trust output:', output);
+    res.json({ message: 'Local CA trusted successfully.', output });
+  } catch (err: any) {
+    res.status(500).json({ error: `caddy trust failed: ${err.message}` });
+  }
 });
 
 // ── Phase 1: Auth rate limiter ────────────────────────────────────────────────
@@ -146,6 +178,241 @@ async function requireProjectOwner(req: Request, res: Response, projectId: strin
   }
   return project;
 }
+
+// ── Phase 4: GitHub crypto helpers ────────────────────────────────────────────
+
+const CIPHER_ALGO = 'aes-256-cbc';
+
+/**
+ * Derive a 32-byte AES key from the daemon's WEBHOOK_SECRET (or a fallback).
+ * The key is stable per installation — same secret → same key every time.
+ */
+function deriveEncryptionKey(): Buffer {
+  const secret = process.env.WEBHOOK_SECRET || 'mini-vercel-default-enc-key-change-me';
+  return crypto.createHash('sha256').update(secret).digest(); // always 32 bytes
+}
+
+function encryptPAT(pat: string): string {
+  const key = deriveEncryptionKey();
+  const iv  = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(CIPHER_ALGO, key, iv);
+  const encrypted = Buffer.concat([cipher.update(pat, 'utf8'), cipher.final()]);
+  return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+function decryptPAT(stored: string): string {
+  const [ivHex, encHex] = stored.split(':');
+  const key = deriveEncryptionKey();
+  const iv  = Buffer.from(ivHex, 'hex');
+  const enc = Buffer.from(encHex, 'hex');
+  const decipher = crypto.createDecipheriv(CIPHER_ALGO, key, iv);
+  return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+}
+
+/** Validate a PAT against the GitHub API and return the GitHub username. */
+async function validateGitHubPAT(pat: string): Promise<{ login: string; name: string | null }> {
+  const nodeFetch = require('node-fetch');
+  const fetch = nodeFetch.default || nodeFetch;
+  const res = await fetch('https://api.github.com/user', {
+    headers: {
+      Authorization: `token ${pat}`,
+      'User-Agent':  'mini-vercel-paas',
+      Accept:        'application/vnd.github+json',
+    },
+  });
+  if (!res.ok) throw new Error(`GitHub API rejected the PAT (HTTP ${res.status})`);
+  const data = await res.json() as any;
+  return { login: data.login, name: data.name };
+}
+
+/** List repos accessible by the PAT. */
+async function listGitHubRepos(pat: string): Promise<any[]> {
+  const nodeFetch = require('node-fetch');
+  const fetch = nodeFetch.default || nodeFetch;
+  // Fetch up to 100 repos the user has push access to (for linking)
+  const res = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator', {
+    headers: {
+      Authorization: `token ${pat}`,
+      'User-Agent':  'mini-vercel-paas',
+      Accept:        'application/vnd.github+json',
+    },
+  });
+  if (!res.ok) throw new Error(`Failed to list repos (HTTP ${res.status})`);
+  return res.json() as any;
+}
+
+/** Register a webhook on a GitHub repo via the API. */
+async function registerGitHubWebhook(pat: string, owner: string, repo: string, webhookUrl: string, secret: string): Promise<void> {
+  const nodeFetch = require('node-fetch');
+  const fetch = nodeFetch.default || nodeFetch;
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/hooks`, {
+    method: 'POST',
+    headers: {
+      Authorization:  `token ${pat}`,
+      'User-Agent':   'mini-vercel-paas',
+      Accept:         'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name:   'web',
+      active: true,
+      events: ['push', 'pull_request'],
+      config: {
+        url:          webhookUrl,
+        content_type: 'json',
+        secret,
+        insecure_ssl: '0',
+      },
+    }),
+  });
+  // 422 = webhook already exists on that repo — treat as success
+  if (!res.ok && res.status !== 422) {
+    const body = await res.json() as any;
+    throw new Error(`Failed to register webhook: ${body.message || res.status}`);
+  }
+}
+
+// ── Phase 4: GitHub account endpoints ────────────────────────────────────────
+
+/**
+ * POST /auth/github/connect
+ * Body: { pat }  — GitHub Personal Access Token
+ * Validates PAT, encrypts it with AES-256, stores it in users table.
+ */
+app.post('/auth/github/connect', verifySessionToken, async (req: Request, res: Response) => {
+  const { pat } = req.body;
+  if (!pat || typeof pat !== 'string' || pat.trim().length < 10) {
+    return res.status(400).json({ error: 'A valid GitHub Personal Access Token is required.' });
+  }
+
+  let ghUser: { login: string; name: string | null };
+  try {
+    ghUser = await validateGitHubPAT(pat.trim());
+  } catch (err: any) {
+    return res.status(401).json({ error: err.message });
+  }
+
+  const encryptedPAT = encryptPAT(pat.trim());
+  const userId = (req as any).userId;
+  await run(
+    'UPDATE users SET github_username = ?, github_pat_encrypted = ? WHERE id = ?',
+    [ghUser.login, encryptedPAT, userId]
+  );
+
+  console.log(`[GitHub] Linked GitHub account @${ghUser.login} to user ${userId}`);
+  res.json({ message: `Connected as @${ghUser.login}`, githubUsername: ghUser.login });
+});
+
+/**
+ * DELETE /auth/github/disconnect
+ * Removes the stored GitHub PAT and username for the authenticated user.
+ */
+app.delete('/auth/github/disconnect', verifySessionToken, async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  await run('UPDATE users SET github_username = NULL, github_pat_encrypted = NULL WHERE id = ?', [userId]);
+  console.log(`[GitHub] Disconnected GitHub from user ${userId}`);
+  res.json({ message: 'GitHub account disconnected.' });
+});
+
+/**
+ * GET /auth/github/status
+ * Returns whether GitHub is linked for the authenticated user.
+ */
+app.get('/auth/github/status', verifySessionToken, async (req: Request, res: Response) => {
+  const user = await get('SELECT github_username FROM users WHERE id = ?', [(req as any).userId]);
+  if (!user?.github_username) {
+    return res.json({ connected: false });
+  }
+  res.json({ connected: true, githubUsername: user.github_username });
+});
+
+/**
+ * GET /api/github/repos
+ * Lists repos accessible by the authenticated user's stored PAT.
+ */
+app.get('/api/github/repos', verifySessionToken, async (req: Request, res: Response) => {
+  const user = await get('SELECT github_pat_encrypted FROM users WHERE id = ?', [(req as any).userId]);
+  if (!user?.github_pat_encrypted) {
+    return res.status(400).json({ error: 'No GitHub account connected. Run "mini-vercel github connect".' });
+  }
+
+  try {
+    const pat   = decryptPAT(user.github_pat_encrypted);
+    const repos = await listGitHubRepos(pat);
+    res.json({ repos: repos.map((r: any) => ({
+      name:          r.name,
+      fullName:      r.full_name,
+      cloneUrl:      r.clone_url,
+      sshUrl:        r.ssh_url,
+      private:       r.private,
+      defaultBranch: r.default_branch,
+      updatedAt:     r.updated_at,
+    }))});
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/projects/link-github
+ * Links a project AND auto-registers the GitHub webhook in one step.
+ * Body: { name, path, repoFullName }   — e.g. repoFullName = "prakrititz/my-app"
+ */
+app.post('/api/projects/link-github', verifySessionToken, async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { name, path: projectPath, repoFullName } = req.body;
+
+  if (!name || !projectPath || !repoFullName) {
+    return res.status(400).json({ error: 'name, path, and repoFullName are required.' });
+  }
+
+  const user = await get('SELECT github_username, github_pat_encrypted FROM users WHERE id = ?', [userId]);
+  if (!user?.github_pat_encrypted) {
+    return res.status(400).json({ error: 'No GitHub account connected. Run "mini-vercel github connect" first.' });
+  }
+
+  const pat  = decryptPAT(user.github_pat_encrypted);
+  const cloneUrl = `https://github.com/${repoFullName}.git`;
+
+  // Create the project record
+  const existing = await get('SELECT id FROM projects WHERE name = ?', [name]);
+  if (existing) {
+    return res.status(409).json({ error: `Project name "${name}" already exists.` });
+  }
+
+  const projectId = uuidv4();
+  await run(
+    'INSERT INTO projects (id, name, path, repository_url, owner_id) VALUES (?, ?, ?, ?, ?)',
+    [projectId, name, projectPath, cloneUrl, userId]
+  );
+
+  // Auto-register the GitHub webhook
+  const [owner, repo] = repoFullName.split('/');
+  const webhookSecret = process.env.WEBHOOK_SECRET || '';
+  const daemonPort    = process.env.DAEMON_PORT || 4000;
+  // Use the user-configured public URL or fall back to localhost (useful with ngrok)
+  const webhookUrl    = process.env.PUBLIC_URL
+    ? `${process.env.PUBLIC_URL}/webhooks/github`
+    : `http://localhost:${daemonPort}/webhooks/github`;
+
+  let webhookStatus = 'skipped';
+  try {
+    await registerGitHubWebhook(pat, owner, repo, webhookUrl, webhookSecret);
+    webhookStatus = 'registered';
+    console.log(`[GitHub] Webhook registered for ${repoFullName} → ${webhookUrl}`);
+  } catch (err: any) {
+    console.warn(`[GitHub] Webhook registration failed: ${err.message}`);
+    webhookStatus = `failed: ${err.message}`;
+  }
+
+  res.status(201).json({
+    projectId,
+    name,
+    repoFullName,
+    cloneUrl,
+    webhookStatus,
+  });
+});
 
 // ── Phase 2+3: Project API (all routes require a valid session) ───────────────
 
@@ -333,6 +600,171 @@ app.delete('/api/projects/:id/env/:key', verifySessionToken, async (req: Request
   await run('DELETE FROM env_vars WHERE project_id = ? AND key = ?', [project.id, req.params.key as string]);
   res.json({ message: `Removed ${req.params.key}.` });
 });
+
+// ── Phase 4 Option B: GitHub OAuth flow ──────────────────────────────────────
+//
+// Prerequisites (set in .env):
+//   GITHUB_CLIENT_ID     = <your OAuth App client id>
+//   GITHUB_CLIENT_SECRET = <your OAuth App client secret>
+//   GITHUB_CALLBACK_URL  = http://localhost:4000/auth/github/callback  (or public URL)
+//
+// Register at: https://github.com/settings/applications/new
+
+/**
+ * In-memory CSRF state store:  state → { userId, expiresAt }
+ * Entries expire after 10 minutes and are cleaned up on each new request.
+ */
+const oauthStateStore = new Map<string, { userId: string; expiresAt: number }>();
+
+function pruneOAuthState() {
+  const now = Date.now();
+  for (const [k, v] of oauthStateStore) {
+    if (v.expiresAt < now) oauthStateStore.delete(k);
+  }
+}
+
+/**
+ * GET /auth/github/start
+ * Initiates the OAuth flow.  Requires a valid session — the state is tied to
+ * the calling user so the callback can update the right account.
+ * Redirects the browser to GitHub's authorization page.
+ */
+app.get('/auth/github/start', verifySessionToken, (req: Request, res: Response) => {
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  if (!clientId) {
+    return res.status(503).json({
+      error: 'GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env.'
+    });
+  }
+
+  pruneOAuthState();
+
+  const state     = crypto.randomBytes(16).toString('hex');
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+  oauthStateStore.set(state, { userId: (req as any).userId, expiresAt });
+
+  const callbackUrl = process.env.GITHUB_CALLBACK_URL || `http://localhost:${PORT}/auth/github/callback`;
+  const params = new URLSearchParams({
+    client_id:    clientId,
+    redirect_uri: callbackUrl,
+    scope:        'repo admin:repo_hook read:user user:email',
+    state,
+  });
+
+  const authorizeUrl = `https://github.com/login/oauth/authorize?${params}`;
+  console.log(`[GitHub OAuth] Redirecting user ${(req as any).userId} to GitHub…`);
+  res.redirect(authorizeUrl);
+});
+
+/**
+ * GET /auth/github/callback
+ * GitHub redirects here after the user approves the OAuth App.
+ * Exchanges the `code` for an access token, validates CSRF state,
+ * stores the token (AES-256 encrypted) and GitHub username on the user record.
+ *
+ * On success, renders a tiny HTML page the user can close.
+ */
+app.get('/auth/github/callback', async (req: Request, res: Response) => {
+  const nodeFetch = require('node-fetch');
+  const fetch     = nodeFetch.default || nodeFetch;
+
+  const { code, state, error: ghError } = req.query as Record<string, string>;
+
+  if (ghError) {
+    return res.status(400).send(oauthPage('❌ GitHub authorization denied.', ghError, false));
+  }
+  if (!code || !state) {
+    return res.status(400).send(oauthPage('❌ Invalid callback.', 'Missing code or state parameter.', false));
+  }
+
+  pruneOAuthState();
+
+  const stored = oauthStateStore.get(state);
+  if (!stored || stored.expiresAt < Date.now()) {
+    return res.status(400).send(oauthPage('❌ State mismatch.', 'OAuth state expired or invalid. Please try again.', false));
+  }
+  oauthStateStore.delete(state);
+
+  const { userId } = stored;
+
+  // Exchange code for access_token
+  const clientId     = process.env.GITHUB_CLIENT_ID!;
+  const clientSecret = process.env.GITHUB_CLIENT_SECRET!;
+  const callbackUrl  = process.env.GITHUB_CALLBACK_URL || `http://localhost:${PORT}/auth/github/callback`;
+
+  let accessToken: string;
+  try {
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept:         'application/json',
+      },
+      body: JSON.stringify({
+        client_id:     clientId,
+        client_secret: clientSecret,
+        code,
+        redirect_uri:  callbackUrl,
+      }),
+    });
+    const tokenData = await tokenRes.json() as any;
+    if (tokenData.error || !tokenData.access_token) {
+      throw new Error(tokenData.error_description || tokenData.error || 'Token exchange failed');
+    }
+    accessToken = tokenData.access_token;
+  } catch (err: any) {
+    console.error('[GitHub OAuth] Token exchange failed:', err.message);
+    return res.status(502).send(oauthPage('❌ Token exchange failed.', err.message, false));
+  }
+
+  // Validate token and get GitHub user info
+  let ghUser: { login: string; name: string | null };
+  try {
+    ghUser = await validateGitHubPAT(accessToken); // reuses existing helper
+  } catch (err: any) {
+    console.error('[GitHub OAuth] Token validation failed:', err.message);
+    return res.status(502).send(oauthPage('❌ Token validation failed.', err.message, false));
+  }
+
+  // Encrypt and persist
+  const encryptedToken = encryptPAT(accessToken);
+  await run(
+    'UPDATE users SET github_username = ?, github_pat_encrypted = ? WHERE id = ?',
+    [ghUser.login, encryptedToken, userId]
+  );
+
+  console.log(`[GitHub OAuth] Linked @${ghUser.login} to user ${userId}`);
+  res.send(oauthPage(
+    `✓ Connected as @${ghUser.login}`,
+    'You can close this tab and return to the terminal.',
+    true
+  ));
+});
+
+/** Tiny self-closing HTML page shown at the end of the OAuth callback. */
+function oauthPage(heading: string, body: string, success: boolean): string {
+  const color = success ? '#22c55e' : '#ef4444';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>mini-vercel GitHub Auth</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display:flex; align-items:center;
+           justify-content:center; min-height:100vh; margin:0; background:#0f172a; color:#f1f5f9; }
+    .card { background:#1e293b; border-radius:12px; padding:2.5rem 3rem; text-align:center; max-width:420px; }
+    h1 { color:${color}; font-size:1.5rem; margin-bottom:.75rem; }
+    p  { color:#94a3b8; margin:0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>${heading}</h1>
+    <p>${body}</p>
+  </div>
+</body>
+</html>`;
+}
 
 // ── GitHub webhook (public — HMAC instead of session) ────────────────────────
 

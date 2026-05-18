@@ -131,6 +131,56 @@ program
     console.log('Caddy is ready.');
   });
 
+// ── caddy ─────────────────────────────────────────────────────────────────────
+
+const caddyCmd = program
+  .command('caddy')
+  .description('Manage Caddy TLS configuration');
+
+caddyCmd
+  .command('trust')
+  .description('Install Caddy local CA into the system trust store (run once, local mode only)')
+  .action(async () => {
+    const f = fetch();
+    let data: any;
+    try {
+      const res = await f(`${DAEMON_URL}/api/caddy/trust`, { method: 'POST' });
+      data = await res.json();
+    } catch {
+      console.error('Could not reach the daemon. Is it running? Run "mini-vercel start-daemon".');
+      process.exit(1);
+    }
+    if (data.error) { console.error(`Error: ${data.error}`); process.exit(1); }
+    console.log('✓', data.message);
+    if (data.output) console.log(data.output);
+  });
+
+caddyCmd
+  .command('mode')
+  .description('Show current Caddy TLS mode and port configuration')
+  .action(async () => {
+    const f = fetch();
+    let data: any;
+    try {
+      const res = await f(`${DAEMON_URL}/api/caddy/mode`);
+      data = await res.json();
+    } catch {
+      console.error('Could not reach the daemon. Is it running? Run "mini-vercel start-daemon".');
+      process.exit(1);
+    }
+    console.log(`Mode:        ${data.mode}`);
+    console.log(`Description: ${data.description}`);
+    console.log(`HTTP port:   ${data.httpPort}`);
+    console.log(`HTTPS port:  ${data.httpsPort}`);
+    console.log('');
+    if (data.mode === 'local') {
+      console.log('Tip: run "mini-vercel caddy trust" once to install the local CA.');
+      console.log('     Then visit https://<project>.localhost in your browser.');
+    } else {
+      console.log('Tip: set CADDY_MODE=local in your .env for local development.');
+    }
+  });
+
 // ── signup ────────────────────────────────────────────────────────────────────
 
 program
@@ -191,6 +241,179 @@ program
     const auth = readAuth();
     if (!auth) console.log('Not logged in.');
     else console.log(`Logged in as: ${auth.email}  (userId: ${auth.userId})`);
+  });
+
+// ── github ────────────────────────────────────────────────────────────────────
+
+const githubCmd = program
+  .command('github')
+  .description('Manage your GitHub account connection');
+
+githubCmd
+  .command('connect')
+  .description('Link your GitHub account via Personal Access Token')
+  .action(async () => {
+    const { sessionToken } = requireAuth();
+
+    console.log('');
+    console.log('Create a PAT at: https://github.com/settings/tokens/new');
+    console.log('Required scopes: repo, admin:repo_hook');
+    console.log('');
+
+    const pat = await prompt('Paste your GitHub Personal Access Token: ', true);
+    if (!pat.trim()) {
+      console.error('No token provided.');
+      process.exit(1);
+    }
+
+    const data = await daemonPost('/auth/github/connect', sessionToken, { pat: pat.trim() });
+    console.log(`\n✓ ${data.message}`);
+    console.log('You can now run "mini-vercel import" to link repos interactively.');
+  });
+
+githubCmd
+  .command('status')
+  .description('Show current GitHub connection status')
+  .action(async () => {
+    const { sessionToken } = requireAuth();
+    const data = await daemonGet('/auth/github/status', sessionToken);
+    if (data.connected) {
+      console.log(`GitHub connected: @${data.githubUsername}`);
+    } else {
+      console.log('GitHub not connected. Run "mini-vercel github connect".');
+    }
+  });
+
+githubCmd
+  .command('disconnect')
+  .description('Remove your stored GitHub credentials')
+  .action(async () => {
+    const { sessionToken } = requireAuth();
+    await daemonDelete('/auth/github/disconnect', sessionToken);
+    console.log('GitHub account disconnected.');
+  });
+
+githubCmd
+  .command('oauth')
+  .description('Link your GitHub account via OAuth (Option B — requires OAuth App in .env)')
+  .action(async () => {
+    const { sessionToken } = requireAuth();
+    const f = fetch();
+
+    // Check if OAuth is configured on the daemon side first
+    const modeCheck = await f(`${DAEMON_URL}/auth/github/start`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${sessionToken}` },
+      redirect: 'manual', // don't follow the redirect — we want the URL
+    });
+
+    if (modeCheck.status === 503) {
+      const data = await modeCheck.json();
+      console.error(`Error: ${(data as any).error}`);
+      console.error('Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in your .env file.');
+      console.error('Register an OAuth App at: https://github.com/settings/applications/new');
+      process.exit(1);
+    }
+
+    // The daemon replied with a 302 → extract the Location header
+    const authorizeUrl = modeCheck.headers.get('location');
+    if (!authorizeUrl) {
+      console.error('Unexpected response from daemon. Is the daemon running?');
+      process.exit(1);
+    }
+
+    // Open the browser automatically (cross-platform)
+    const { exec: execCb } = require('child_process');
+    const openCmd = process.platform === 'win32' ? `start "" "${authorizeUrl}"`
+                  : process.platform === 'darwin' ? `open "${authorizeUrl}"`
+                  : `xdg-open "${authorizeUrl}"`;
+    execCb(openCmd);
+
+    console.log('');
+    console.log('Opening GitHub authorization page in your browser…');
+    console.log(`If it didn't open automatically, visit:\n  ${authorizeUrl}`);
+    console.log('');
+    console.log('Waiting for authorization (timeout: 5 minutes)…');
+
+    // Poll github/status until the token appears (set by the callback)
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const statusRes = await f(`${DAEMON_URL}/auth/github/status`, {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        });
+        const status = await statusRes.json() as any;
+        if (status.connected) {
+          console.log(`\n✓ Connected as @${status.githubUsername}`);
+          console.log('You can now run "mini-vercel import" to link repos interactively.');
+          return;
+        }
+      } catch { /* daemon may briefly restart */ }
+    }
+
+    console.error('\nTimeout: GitHub authorization was not completed within 5 minutes.');
+    console.error('Run "mini-vercel github oauth" to try again.');
+    process.exit(1);
+  });
+
+// ── import ────────────────────────────────────────────────────────────────────
+
+program
+  .command('import')
+  .description('Interactively select a GitHub repo and link it as a project')
+  .option('-n, --name <name>', 'Override the project name')
+  .action(async (options) => {
+    const { sessionToken } = requireAuth();
+    const cwd = process.cwd();
+
+    // 1. Fetch repo list from daemon (uses stored PAT)
+    console.log('Fetching your GitHub repositories...');
+    const { repos } = await daemonGet('/api/github/repos', sessionToken);
+
+    if (!repos.length) {
+      console.log('No repositories found. Make sure your PAT has "repo" scope.');
+      process.exit(1);
+    }
+
+    // 2. Prompt for selection using inquirer
+    const inquirer = require('inquirer');
+    const { selectedRepo } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'selectedRepo',
+        message: 'Select a repository to link:',
+        choices: repos.map((r: any) => ({
+          name:  `${r.fullName}${r.private ? ' 🔒' : ''} (${r.defaultBranch})`,
+          value: r,
+        })),
+        pageSize: 15,
+      },
+    ]);
+
+    // 3. Confirm project name
+    const defaultName = options.name || selectedRepo.name;
+    const { projectName } = await inquirer.prompt([
+      {
+        type:    'input',
+        name:    'projectName',
+        message: 'Project name:',
+        default: defaultName,
+      },
+    ]);
+
+    // 4. Link the project and auto-register webhook via daemon
+    console.log(`\nLinking "${projectName}" → ${selectedRepo.fullName}...`);
+    const data = await daemonPost('/api/projects/link-github', sessionToken, {
+      name:         projectName,
+      path:         cwd,
+      repoFullName: selectedRepo.fullName,
+    });
+
+    console.log(`\n✓ Project "${data.name}" linked.`);
+    console.log(`  Repo:    https://github.com/${data.repoFullName}`);
+    console.log(`  Webhook: ${data.webhookStatus}`);
+    console.log(`\nRun "mini-vercel deploy" to trigger your first deployment.`);
   });
 
 // ── link ──────────────────────────────────────────────────────────────────────
