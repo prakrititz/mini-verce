@@ -37,71 +37,56 @@ app.get('/api/queue', (_req, res) => {
   res.json({ length: buildQueue.getLength(), isBusy: buildQueue.isBusy() });
 });
 
-// ── Phase 1: Identity endpoints ───────────────────────────────────────────────
+// ── Phase 1: Auth rate limiter ────────────────────────────────────────────────
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 20,
   message: { error: 'Too many auth attempts. Please wait.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+// ── Phase 1: Identity endpoints ───────────────────────────────────────────────
+
 /**
  * POST /auth/signup
- * Body: { email, password }
- * Creates a new user account with bcrypt-hashed password and returns a session token.
+ * Creates a new user with bcrypt-hashed password and returns a session token.
  */
 app.post('/auth/signup', authLimiter, async (req: Request, res: Response) => {
   const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required.' });
-  }
-  if (typeof password !== 'string' || password.length < 8) {
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+  if (typeof password !== 'string' || password.length < 8)
     return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     return res.status(400).json({ error: 'Invalid email format.' });
-  }
 
   const existing = await get('SELECT id FROM users WHERE email = ?', [email]);
-  if (existing) {
-    return res.status(409).json({ error: 'An account with this email already exists.' });
-  }
+  if (existing) return res.status(409).json({ error: 'An account with this email already exists.' });
 
   const passwordHash = await bcrypt.hash(password, 12);
   const userId = uuidv4();
   await run('INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)', [userId, email, passwordHash]);
 
   const sessionToken = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   await run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', [sessionToken, userId, expiresAt]);
 
-  console.log(`[Auth] New account created: ${email} (${userId})`);
+  console.log(`[Auth] Signup: ${email} (${userId})`);
   res.status(201).json({ userId, sessionToken });
 });
 
 /**
  * POST /auth/login
- * Body: { email, password }
- * Verifies credentials and returns a new session token.
+ * Verifies credentials, returns a new session token.
  */
 app.post('/auth/login', authLimiter, async (req: Request, res: Response) => {
   const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required.' });
-  }
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
 
   const user = await get('SELECT * FROM users WHERE email = ?', [email]);
-  if (!user) {
-    // Same error regardless of whether email exists — prevents enumeration
-    return res.status(401).json({ error: 'Invalid email or password.' });
-  }
-
-  const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) {
+  // Constant-time comparison path — same error prevents account enumeration
+  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
@@ -115,43 +100,241 @@ app.post('/auth/login', authLimiter, async (req: Request, res: Response) => {
 
 /**
  * POST /auth/logout
- * Deletes the caller's session token.
+ * Destroys the caller's session.
  */
 app.post('/auth/logout', async (req: Request, res: Response) => {
   const token = req.headers['authorization']?.replace('Bearer ', '');
-  if (token) {
-    await run('DELETE FROM sessions WHERE token = ?', [token]).catch(() => {});
-  }
+  if (token) await run('DELETE FROM sessions WHERE token = ?', [token]).catch(() => {});
   res.json({ message: 'Logged out.' });
 });
 
-// ── Phase 1: Session auth middleware ──────────────────────────────────────────
+// ── Phase 3: Session auth middleware ──────────────────────────────────────────
 
 /**
- * Validates the Bearer session token from the Authorization header.
- * Attaches req.userId on success.
+ * Reads Authorization: Bearer <token>, validates against sessions table,
+ * and attaches req.userId. Every protected route uses this.
  */
 async function verifySessionToken(req: Request, res: Response, next: NextFunction) {
   const token = req.headers['authorization']?.replace('Bearer ', '');
   if (!token) {
     return res.status(401).json({ error: 'Authentication required. Run "mini-vercel login".' });
   }
-
   const session = await get(
-    `SELECT s.user_id FROM sessions s
-     WHERE s.token = ? AND s.expires_at > datetime('now')`,
+    `SELECT user_id FROM sessions WHERE token = ? AND expires_at > datetime('now')`,
     [token]
   );
-
   if (!session) {
     return res.status(401).json({ error: 'Session expired or invalid. Run "mini-vercel login".' });
   }
-
   (req as any).userId = session.user_id;
   next();
 }
 
-// ── GitHub webhook middleware ─────────────────────────────────────────────────
+/**
+ * Phase 2 helper: load a project by id and assert the caller owns it.
+ * Returns the project row or sends 403/404 and returns null.
+ */
+async function requireProjectOwner(req: Request, res: Response, projectId: string): Promise<any | null> {
+  const project = await get('SELECT * FROM projects WHERE id = ?', [projectId]);
+  if (!project) {
+    res.status(404).json({ error: 'Project not found.' });
+    return null;
+  }
+  if (project.owner_id && project.owner_id !== (req as any).userId) {
+    res.status(403).json({ error: 'Access denied: you do not own this project.' });
+    return null;
+  }
+  return project;
+}
+
+// ── Phase 2+3: Project API (all routes require a valid session) ───────────────
+
+/**
+ * POST /api/projects/link
+ * Registers the current directory as a project owned by the authenticated user.
+ * Body: { name, path, repositoryUrl? }
+ */
+app.post('/api/projects/link', verifySessionToken, async (req: Request, res: Response) => {
+  const { name, path: projectPath, repositoryUrl } = req.body;
+  const userId = (req as any).userId;
+
+  if (!name || !projectPath) {
+    return res.status(400).json({ error: 'name and path are required.' });
+  }
+
+  const existing = await get('SELECT id FROM projects WHERE name = ?', [name]);
+  if (existing) {
+    return res.status(409).json({ error: `Project name "${name}" already exists.` });
+  }
+
+  const projectId = uuidv4();
+  await run(
+    'INSERT INTO projects (id, name, path, repository_url, owner_id) VALUES (?, ?, ?, ?, ?)',
+    [projectId, name, projectPath, repositoryUrl || null, userId]
+  );
+
+  console.log(`[Projects] Linked "${name}" for user ${userId}`);
+  res.status(201).json({ projectId, name, path: projectPath, ownerId: userId });
+});
+
+/**
+ * GET /api/projects
+ * Returns only the projects owned by the authenticated user.
+ */
+app.get('/api/projects', verifySessionToken, async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const projects = await all(`
+    SELECT p.id, p.name, p.path, p.repository_url, p.custom_domain, p.created_at,
+           d.status, d.port, d.env
+    FROM projects p
+    LEFT JOIN deployments d ON p.id = d.project_id
+    WHERE p.owner_id = ?
+    AND (d.created_at = (
+      SELECT MAX(created_at) FROM deployments WHERE project_id = p.id
+    ) OR d.id IS NULL)
+  `, [userId]);
+  res.json({ projects });
+});
+
+/**
+ * GET /api/projects/by-path?path=<cwd>
+ * Looks up a project by its filesystem path, scoped to the authenticated user.
+ */
+app.get('/api/projects/by-path', verifySessionToken, async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const projectPath = req.query.path as string;
+  if (!projectPath) return res.status(400).json({ error: 'path query parameter required.' });
+
+  const project = await get(
+    'SELECT * FROM projects WHERE path = ? AND owner_id = ?',
+    [projectPath, userId]
+  );
+  if (!project) return res.status(404).json({ error: 'No project found at this path for your account.' });
+  res.json({ project });
+});
+
+/**
+ * GET /api/projects/:id
+ * Returns a single project — ownership enforced.
+ */
+app.get('/api/projects/:id', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+  res.json({ project });
+});
+
+/**
+ * POST /api/projects/:id/deploy
+ * Triggers a production deployment — ownership enforced.
+ */
+app.post('/api/projects/:id/deploy', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+
+  const buildId = uuidv4();
+  res.status(202).json({ message: 'Deployment enqueued.', buildId, project: project.name });
+
+  buildQueue.enqueue(async () => {
+    try {
+      console.log(`[Deploy] Starting production deploy for "${project.name}" (buildId: ${buildId})`);
+      await deployProject({ project, sourcePath: project.path, env: 'production' });
+      console.log(`[Deploy] Done: "${project.name}"`);
+    } catch (err) {
+      console.error(`[Deploy] Failed for "${project.name}":`, err);
+    }
+  });
+});
+
+/**
+ * POST /api/projects/:id/rollback
+ * Rolls back to the most recent stopped deployment — ownership enforced.
+ */
+app.post('/api/projects/:id/rollback', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+
+  const running = await get(
+    'SELECT * FROM deployments WHERE project_id = ? AND status = ? AND env = ?',
+    [project.id, 'running', 'production']
+  );
+  const stopped = await all(
+    'SELECT * FROM deployments WHERE project_id = ? AND status = ? AND env = ? ORDER BY created_at DESC LIMIT 3',
+    [project.id, 'stopped', 'production']
+  );
+
+  if (!stopped.length) {
+    return res.status(400).json({ error: 'No previous deployments available for rollback.' });
+  }
+
+  const target = stopped[0];
+  if (running) await run('UPDATE deployments SET status = ? WHERE id = ?', ['stopped', running.id]);
+  await run('UPDATE deployments SET status = ? WHERE id = ?', ['running', target.id]);
+  await generateAndReload();
+
+  console.log(`[Rollback] "${project.name}" rolled back to deployment from ${target.created_at}`);
+  res.json({ message: 'Rollback complete.', deployedAt: target.created_at });
+});
+
+/**
+ * PATCH /api/projects/:id/domain
+ * Sets or clears a custom domain — ownership enforced.
+ * Body: { domain } or { domain: null }
+ */
+app.patch('/api/projects/:id/domain', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+
+  const { domain } = req.body;
+  await run('UPDATE projects SET custom_domain = ? WHERE id = ?', [domain || null, project.id]);
+  await generateAndReload();
+
+  const msg = domain ? `Custom domain "${domain}" set.` : 'Custom domain removed.';
+  console.log(`[Domain] ${project.name}: ${msg}`);
+  res.json({ message: msg });
+});
+
+/**
+ * GET /api/projects/:id/env
+ * Returns all env vars for a project — ownership enforced.
+ */
+app.get('/api/projects/:id/env', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+  const vars = await all('SELECT key, value, is_secret FROM env_vars WHERE project_id = ?', [project.id]);
+  res.json({ vars });
+});
+
+/**
+ * PUT /api/projects/:id/env
+ * Upserts an env var — ownership enforced.
+ * Body: { key, value }
+ */
+app.put('/api/projects/:id/env', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+
+  const { key, value } = req.body;
+  if (!key || value === undefined) return res.status(400).json({ error: 'key and value are required.' });
+
+  await run(
+    'INSERT INTO env_vars (id, project_id, key, value) VALUES (?, ?, ?, ?) ON CONFLICT(project_id, key) DO UPDATE SET value = excluded.value',
+    [uuidv4(), project.id, key, value]
+  );
+  res.json({ message: `Set ${key}.` });
+});
+
+/**
+ * DELETE /api/projects/:id/env/:key
+ * Removes an env var — ownership enforced.
+ */
+app.delete('/api/projects/:id/env/:key', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+  await run('DELETE FROM env_vars WHERE project_id = ? AND key = ?', [project.id, req.params.key as string]);
+  res.json({ message: `Removed ${req.params.key}.` });
+});
+
+// ── GitHub webhook (public — HMAC instead of session) ────────────────────────
 
 function verifyGitHubSignature(req: Request, res: Response, next: NextFunction) {
   const secret = process.env.WEBHOOK_SECRET;
@@ -180,8 +363,6 @@ const webhookLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// ── GitHub webhook handler ────────────────────────────────────────────────────
-
 app.post('/webhooks/github', webhookLimiter, verifyGitHubSignature, async (req: Request, res: Response) => {
   const repoCloneUrl = req.body.repository?.clone_url;
   const repoHtmlUrl = req.body.repository?.html_url;
@@ -194,13 +375,11 @@ app.post('/webhooks/github', webhookLimiter, verifyGitHubSignature, async (req: 
   const project = projects.find(p => {
     const target = p.repository_url.trim().replace(/\.git$/, '');
     const incomingClone = (repoCloneUrl || '').trim().replace(/\.git$/, '');
-    const incomingHtml = (repoHtmlUrl || '').trim().replace(/\.git$/, '');
+    const incomingHtml  = (repoHtmlUrl  || '').trim().replace(/\.git$/, '');
     return target === incomingClone || target === incomingHtml;
   });
 
-  if (!project) {
-    return res.status(404).json({ error: 'No linked project found for this repository' });
-  }
+  if (!project) return res.status(404).json({ error: 'No linked project found for this repository' });
 
   const event = req.headers['x-github-event'];
 
@@ -209,15 +388,14 @@ app.post('/webhooks/github', webhookLimiter, verifyGitHubSignature, async (req: 
     if (ref !== 'refs/heads/main' && ref !== 'refs/heads/master') {
       return res.json({ message: `Push to ${ref} ignored.` });
     }
-
     const buildId = uuidv4();
-    const targetRepoUrl = repoCloneUrl || repoHtmlUrl;
+    const targetUrl = repoCloneUrl || repoHtmlUrl;
     res.status(202).json({ message: 'Production deployment enqueued', buildId, project: project.name });
 
     buildQueue.enqueue(async () => {
       const tempDir = path.join(process.cwd(), '.temp-builds', buildId);
       try {
-        await execAsync(`git clone --depth 1 ${targetRepoUrl} "${tempDir}"`);
+        await execAsync(`git clone --depth 1 ${targetUrl} "${tempDir}"`);
         await deployProject({ project, sourcePath: tempDir, env: 'production' });
         console.log(`[Queue] Production deploy complete for "${project.name}".`);
       } catch (err) {
@@ -230,26 +408,25 @@ app.post('/webhooks/github', webhookLimiter, verifyGitHubSignature, async (req: 
   } else if (event === 'pull_request') {
     const action = req.body.action;
     const prNumber = req.body.pull_request?.number;
-    const prHeadRepoUrl = req.body.pull_request?.head?.repo?.clone_url || req.body.pull_request?.head?.repo?.html_url;
-    const prBranch = req.body.pull_request?.head?.ref;
+    const prHeadUrl = req.body.pull_request?.head?.repo?.clone_url || req.body.pull_request?.head?.repo?.html_url;
+    const prBranch  = req.body.pull_request?.head?.ref;
 
     if (!prNumber) return res.status(400).json({ error: 'PR number missing' });
 
     const customUrl = `pr-${prNumber}.${project.name}.localhost`;
 
     if (action === 'opened' || action === 'synchronize' || action === 'reopened') {
-      if (!prHeadRepoUrl || !prBranch) {
-        return res.status(400).json({ error: 'PR head details missing' });
-      }
+      if (!prHeadUrl || !prBranch) return res.status(400).json({ error: 'PR head details missing' });
+
       const buildId = uuidv4();
-      res.status(202).json({ message: `Preview deploy enqueued for PR #${prNumber}`, buildId, previewUrl: `http://${customUrl}:8080` });
+      res.status(202).json({ message: `Preview enqueued for PR #${prNumber}`, buildId, previewUrl: `http://${customUrl}:8080` });
 
       buildQueue.enqueue(async () => {
         const tempDir = path.join(process.cwd(), '.temp-builds', buildId);
         try {
-          await execAsync(`git clone --depth 1 --branch ${prBranch} ${prHeadRepoUrl} "${tempDir}"`);
+          await execAsync(`git clone --depth 1 --branch ${prBranch} ${prHeadUrl} "${tempDir}"`);
           await deployProject({ project, sourcePath: tempDir, env: 'preview', customUrl });
-          console.log(`[Queue] Preview ready at http://${customUrl}:8080`);
+          console.log(`[Queue] Preview ready: http://${customUrl}:8080`);
         } catch (err) {
           console.error(`[Queue] Preview deploy failed for PR #${prNumber}:`, err);
         } finally {

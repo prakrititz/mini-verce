@@ -68,6 +68,7 @@ export async function initDB() {
       path           TEXT NOT NULL,
       repository_url TEXT,
       custom_domain  TEXT,
+      owner_id       TEXT REFERENCES users(id),
       created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -103,9 +104,11 @@ export async function initDB() {
     "ALTER TABLE deployments ADD COLUMN env TEXT DEFAULT 'production'",
     "ALTER TABLE deployments ADD COLUMN url TEXT",
     "ALTER TABLE projects ADD COLUMN custom_domain TEXT",
-    // Phase 1: identity columns on legacy users table (if it existed with just token)
+    // Phase 1: identity columns on legacy users table
     "ALTER TABLE users ADD COLUMN email TEXT",
     "ALTER TABLE users ADD COLUMN password_hash TEXT",
+    // Phase 2: project ownership
+    "ALTER TABLE projects ADD COLUMN owner_id TEXT REFERENCES users(id)",
   ];
 
   for (const sql of migrations) {

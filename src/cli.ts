@@ -3,21 +3,27 @@
 import { Command } from 'commander';
 import { spawn } from 'child_process';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import os from 'os';
 import readline from 'readline';
-import { initDB, run, get, all } from './db';
+import { startCaddy } from './caddy';
 import { printContainerLogs } from './docker';
-import { startCaddy, generateAndReload } from './caddy';
-import { deployProject } from './deployer';
+import { initDB, get, all, run } from './db';
 
-// ── Auth helpers ─────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const AUTH_PATH = path.join(os.homedir(), '.mini-vercel-auth.json');
 const DAEMON_URL = `http://localhost:${process.env.DAEMON_PORT || 4000}`;
 
-function readAuth(): { userId: string; sessionToken: string; email: string } | null {
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+
+interface AuthSession {
+  userId: string;
+  sessionToken: string;
+  email: string;
+}
+
+function readAuth(): AuthSession | null {
   try {
     if (!fs.existsSync(AUTH_PATH)) return null;
     return JSON.parse(fs.readFileSync(AUTH_PATH, 'utf-8'));
@@ -26,16 +32,53 @@ function readAuth(): { userId: string; sessionToken: string; email: string } | n
   }
 }
 
-function requireAuth(): { userId: string; sessionToken: string; email: string } {
+function requireAuth(): AuthSession {
   const auth = readAuth();
   if (!auth) {
-    console.error('Error: Not logged in. Run "mini-vercel login" first.');
+    console.error('Not logged in. Run "mini-vercel login" first.');
     process.exit(1);
   }
   return auth;
 }
 
-/** Prompt for a value, optionally masking input (for passwords). */
+// ── Daemon HTTP helpers ───────────────────────────────────────────────────────
+
+function fetch() {
+  const nodeFetch = require('node-fetch');
+  return nodeFetch.default || nodeFetch;
+}
+
+async function daemonRequest(
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  endpoint: string,
+  token: string | undefined,
+  body?: any
+): Promise<any> {
+  const f = fetch();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await f(`${DAEMON_URL}${endpoint}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json();
+  if (data.error) {
+    console.error(`Error: ${data.error}`);
+    process.exit(1);
+  }
+  return data;
+}
+
+// Shorthand wrappers
+const daemonGet  = (ep: string, token: string) => daemonRequest('GET',    ep, token);
+const daemonPost = (ep: string, token: string | undefined, body: any) => daemonRequest('POST',   ep, token, body);
+const daemonPut    = (ep: string, token: string, body: any) => daemonRequest('PUT',    ep, token, body);
+const daemonPatch  = (ep: string, token: string, body: any) => daemonRequest('PATCH',  ep, token, body);
+const daemonDelete = (ep: string, token: string)             => daemonRequest('DELETE', ep, token);
+
+// ── Prompt helper ─────────────────────────────────────────────────────────────
+
 function prompt(question: string, silent = false): Promise<string> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -59,29 +102,12 @@ function prompt(question: string, silent = false): Promise<string> {
         }
       });
     } else {
-      rl.question(question, (answer) => {
-        rl.close();
-        resolve(answer.trim());
-      });
+      rl.question(question, (answer) => { rl.close(); resolve(answer.trim()); });
     }
   });
 }
 
-/** POST to the daemon, attaching the session token as Bearer auth. */
-async function daemonPost(endpoint: string, body: any, token?: string): Promise<any> {
-  const nodeFetch = require('node-fetch');
-  const fetch = nodeFetch.default || nodeFetch;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`${DAEMON_URL}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-  return res.json();
-}
-
-// ── CLI ───────────────────────────────────────────────────────────────────────
+// ── CLI definition ────────────────────────────────────────────────────────────
 
 const program = new Command();
 program
@@ -89,11 +115,11 @@ program
   .description('A self-hosted PaaS CLI')
   .version('2.0.0');
 
-// ── start-daemon ─────────────────────────────────────────────────────────────
+// ── start-daemon ──────────────────────────────────────────────────────────────
 
 program
   .command('start-daemon')
-  .description('Starts the background daemon server')
+  .description('Start the background daemon server and Caddy proxy')
   .action(async () => {
     const daemonPath = path.join(__dirname, 'daemon.js');
     console.log('Starting daemon...');
@@ -111,27 +137,16 @@ program
   .command('signup')
   .description('Create a persistent local account')
   .action(async () => {
-    const email = await prompt('Email: ');
+    const email    = await prompt('Email: ');
     const password = await prompt('Password: ', true);
-    const confirm = await prompt('Confirm password: ', true);
+    const confirm  = await prompt('Confirm password: ', true);
 
-    if (password !== confirm) {
-      console.error('Error: Passwords do not match.');
-      process.exit(1);
-    }
-    if (password.length < 8) {
-      console.error('Error: Password must be at least 8 characters.');
-      process.exit(1);
-    }
+    if (password !== confirm) { console.error('Passwords do not match.'); process.exit(1); }
+    if (password.length < 8)  { console.error('Password must be at least 8 characters.'); process.exit(1); }
 
-    const data = await daemonPost('/auth/signup', { email, password });
-    if (data.error) {
-      console.error('Signup failed:', data.error);
-      process.exit(1);
-    }
-
+    const data = await daemonPost('/auth/signup', undefined, { email, password });
     fs.writeFileSync(AUTH_PATH, JSON.stringify({ userId: data.userId, sessionToken: data.sessionToken, email }, null, 2));
-    console.log(`Account created and logged in as ${email}.`);
+    console.log(`Account created. Logged in as ${email}.`);
     console.log(`Session saved to ${AUTH_PATH}`);
   });
 
@@ -141,15 +156,10 @@ program
   .command('login')
   .description('Authenticate with your local account')
   .action(async () => {
-    const email = await prompt('Email: ');
+    const email    = await prompt('Email: ');
     const password = await prompt('Password: ', true);
 
-    const data = await daemonPost('/auth/login', { email, password });
-    if (data.error) {
-      console.error('Login failed:', data.error);
-      process.exit(1);
-    }
-
+    const data = await daemonPost('/auth/login', undefined, { email, password });
     fs.writeFileSync(AUTH_PATH, JSON.stringify({ userId: data.userId, sessionToken: data.sessionToken, email }, null, 2));
     console.log(`Logged in as ${email}.`);
   });
@@ -162,10 +172,14 @@ program
   .action(async () => {
     const auth = readAuth();
     if (auth) {
-      await daemonPost('/auth/logout', {}, auth.sessionToken).catch(() => {});
+      const f = fetch();
+      await f(`${DAEMON_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${auth.sessionToken}` }
+      }).catch(() => {});
     }
     if (fs.existsSync(AUTH_PATH)) fs.unlinkSync(AUTH_PATH);
-    console.log('Logged out. Session destroyed.');
+    console.log('Logged out.');
   });
 
 // ── whoami ────────────────────────────────────────────────────────────────────
@@ -175,85 +189,65 @@ program
   .description('Show the currently logged-in account')
   .action(() => {
     const auth = readAuth();
-    if (!auth) {
-      console.log('Not logged in.');
-    } else {
-      console.log(`Logged in as: ${auth.email} (userId: ${auth.userId})`);
-    }
+    if (!auth) console.log('Not logged in.');
+    else console.log(`Logged in as: ${auth.email}  (userId: ${auth.userId})`);
   });
 
 // ── link ──────────────────────────────────────────────────────────────────────
 
 program
   .command('link')
-  .description('Connect the current directory to a project')
-  .option('-n, --name <name>', 'Project name')
+  .description('Register the current directory as a project')
+  .option('-n, --name <name>', 'Project name (defaults to folder name)')
   .option('-r, --repo <repo>', 'GitHub repository URL')
   .action(async (options) => {
-    await initDB();
-    const auth = requireAuth();
-    const dirName = path.basename(process.cwd());
-    const projectName = options.name || dirName;
-    const repoUrl = options.repo || null;
-    const projectId = uuidv4();
+    const { sessionToken, email } = requireAuth();
+    const cwd  = process.cwd();
+    const name = options.name || path.basename(cwd);
 
-    try {
-      await run(
-        'INSERT INTO projects (id, name, path, repository_url) VALUES (?, ?, ?, ?)',
-        [projectId, projectName, process.cwd(), repoUrl]
-      );
-      console.log(`Project "${projectName}" linked (user: ${auth.email}).`);
-    } catch (error: any) {
-      if (error.message.includes('UNIQUE constraint failed')) {
-        console.error(`Error: Project name "${projectName}" already exists.`);
-      } else {
-        console.error('Failed to link project:', error);
-      }
-    }
+    const data = await daemonPost('/api/projects/link', sessionToken, {
+      name,
+      path: cwd,
+      repositoryUrl: options.repo || null,
+    });
+
+    console.log(`Project "${data.name}" linked.`);
+    console.log(`Owner: ${email} | ID: ${data.projectId}`);
   });
 
 // ── deploy ────────────────────────────────────────────────────────────────────
 
 program
   .command('deploy')
-  .description('Manually trigger a Docker build and deployment')
+  .description('Trigger a production build and deployment')
   .action(async () => {
-    await initDB();
-    requireAuth(); // ensures user is logged in before any work happens
+    const { sessionToken } = requireAuth();
     const cwd = process.cwd();
-    const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
-    if (!project) {
-      console.error('Error: Project not found. Run "mini-vercel link" first.');
-      process.exit(1);
-    }
-    try {
-      await deployProject({ project, sourcePath: cwd, env: 'production' });
-    } catch (err: any) {
-      console.error('Deployment failed:', err);
-    }
+
+    // Phase 3: resolve project via daemon (ownership enforced server-side)
+    const { project } = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(cwd)}`, sessionToken);
+    const data = await daemonPost(`/api/projects/${project.id}/deploy`, sessionToken, {});
+
+    console.log(`Deployment enqueued (buildId: ${data.buildId})`);
+    console.log(`Watch logs: mini-vercel logs`);
   });
 
 // ── list ──────────────────────────────────────────────────────────────────────
 
 program
   .command('list')
-  .description('List all projects and their status')
+  .description('List your projects and their deployment status')
   .action(async () => {
-    await initDB();
-    requireAuth();
-    const projects = await all(`
-      SELECT p.name, d.port, d.status
-      FROM projects p
-      LEFT JOIN deployments d ON p.id = d.project_id
-      WHERE d.created_at = (
-        SELECT MAX(created_at) FROM deployments WHERE project_id = p.id
-      ) OR d.id IS NULL
-    `);
-    console.log('Projects:');
-    console.table(projects.map(p => ({
+    const { sessionToken } = requireAuth();
+    const { projects } = await daemonGet('/api/projects', sessionToken);
+
+    if (!projects.length) { console.log('No projects yet. Run "mini-vercel link".'); return; }
+
+    console.log('\nYour Projects:');
+    console.table(projects.map((p: any) => ({
       Project: p.name,
-      Status: p.status || 'No Deployments',
-      URL: p.status === 'running' ? `http://${p.name}.localhost:8080` : 'N/A',
+      Status:  p.status || 'no deployments',
+      URL:     p.status === 'running' ? `http://${p.name}.localhost:8080` : 'N/A',
     })));
   });
 
@@ -267,41 +261,33 @@ envCmd
   .command('add <key> <value>')
   .description('Add or update an environment variable')
   .action(async (key, value) => {
-    await initDB();
-    requireAuth();
-    const project = await get('SELECT * FROM projects WHERE path = ?', [process.cwd()]);
-    if (!project) { console.error('Error: Project not found.'); process.exit(1); }
-    await run(
-      'INSERT INTO env_vars (id, project_id, key, value) VALUES (?, ?, ?, ?) ON CONFLICT(project_id, key) DO UPDATE SET value = excluded.value',
-      [uuidv4(), project.id, key, value]
-    );
-    console.log(`Set ${key} on project "${project.name}".`);
+    const { sessionToken } = requireAuth();
+    const { project } = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+    await daemonPut(`/api/projects/${project.id}/env`, sessionToken, { key, value });
+    console.log(`Set ${key} on "${project.name}".`);
   });
 
 envCmd
   .command('rm <key>')
   .description('Remove an environment variable')
   .action(async (key) => {
-    await initDB();
-    requireAuth();
-    const project = await get('SELECT * FROM projects WHERE path = ?', [process.cwd()]);
-    if (!project) { console.error('Error: Project not found.'); process.exit(1); }
-    await run('DELETE FROM env_vars WHERE project_id = ? AND key = ?', [project.id, key]);
-    console.log(`Removed ${key} from project "${project.name}".`);
+    const { sessionToken } = requireAuth();
+    const { project } = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+    await daemonDelete(`/api/projects/${project.id}/env/${encodeURIComponent(key)}`, sessionToken);
+    console.log(`Removed ${key} from "${project.name}".`);
   });
 
 envCmd
   .command('pull')
   .description('Write stored env vars to a local .env file')
   .action(async () => {
-    await initDB();
-    requireAuth();
-    const project = await get('SELECT * FROM projects WHERE path = ?', [process.cwd()]);
-    if (!project) { console.error('Error: Project not found.'); process.exit(1); }
-    const vars = await all('SELECT key, value FROM env_vars WHERE project_id = ?', [project.id]);
+    const { sessionToken } = requireAuth();
+    const cwd = process.cwd();
+    const { project } = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(cwd)}`, sessionToken);
+    const { vars } = await daemonGet(`/api/projects/${project.id}/env`, sessionToken);
     if (!vars.length) { console.log('No environment variables found.'); return; }
-    fs.writeFileSync(path.join(process.cwd(), '.env'), vars.map(r => `${r.key}=${r.value}`).join('\n'));
-    console.log(`Wrote ${vars.length} variables to .env`);
+    fs.writeFileSync(path.join(cwd, '.env'), vars.map((v: any) => `${v.key}=${v.value}`).join('\n'));
+    console.log(`Wrote ${vars.length} variable(s) to .env`);
   });
 
 // ── logs ──────────────────────────────────────────────────────────────────────
@@ -312,11 +298,18 @@ program
   .option('-f, --follow', 'Stream live log output')
   .action(async (projectName, options) => {
     await initDB();
-    requireAuth();
-    const project = projectName
-      ? await get('SELECT * FROM projects WHERE name = ?', [projectName])
-      : await get('SELECT * FROM projects WHERE path = ?', [process.cwd()]);
-    if (!project) { console.error('Error: Project not found.'); process.exit(1); }
+    const { sessionToken, userId } = requireAuth();
+
+    // Resolve project — either by name arg or by cwd, scoped to this user
+    let project: any;
+    if (projectName) {
+      project = await get('SELECT * FROM projects WHERE name = ? AND owner_id = ?', [projectName, userId]);
+    } else {
+      const res = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+      project = res.project;
+    }
+
+    if (!project) { console.error('Project not found.'); process.exit(1); }
 
     const dep = await get(
       'SELECT container_id FROM deployments WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
@@ -336,55 +329,35 @@ const domainCmd = program
 
 domainCmd
   .command('add <domain>')
+  .description('Set a custom domain')
   .action(async (domain) => {
-    await initDB();
-    requireAuth();
-    const project = await get('SELECT * FROM projects WHERE path = ?', [process.cwd()]);
-    if (!project) { console.error('Error: Project not found.'); process.exit(1); }
-    await run('UPDATE projects SET custom_domain = ? WHERE id = ?', [domain, project.id]);
-    console.log(`Custom domain ${domain} set on "${project.name}".`);
-    await generateAndReload();
+    const { sessionToken } = requireAuth();
+    const { project } = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+    await daemonPatch(`/api/projects/${project.id}/domain`, sessionToken, { domain });
+    console.log(`Custom domain "${domain}" set on "${project.name}".`);
   });
 
 domainCmd
   .command('rm')
+  .description('Remove the custom domain')
   .action(async () => {
-    await initDB();
-    requireAuth();
-    const project = await get('SELECT * FROM projects WHERE path = ?', [process.cwd()]);
-    if (!project) { console.error('Error: Project not found.'); process.exit(1); }
-    await run('UPDATE projects SET custom_domain = NULL WHERE id = ?', [project.id]);
+    const { sessionToken } = requireAuth();
+    const { project } = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+    await daemonPatch(`/api/projects/${project.id}/domain`, sessionToken, { domain: null });
     console.log(`Custom domain removed from "${project.name}".`);
-    await generateAndReload();
   });
 
 // ── rollback ──────────────────────────────────────────────────────────────────
 
 program
   .command('rollback')
-  .description('Rollback to the previous deployment')
+  .description('Roll back to the previous deployment')
   .action(async () => {
-    await initDB();
-    requireAuth();
-    const project = await get('SELECT * FROM projects WHERE path = ?', [process.cwd()]);
-    if (!project) { console.error('Error: Project not found.'); process.exit(1); }
-
-    const running = await get(
-      'SELECT * FROM deployments WHERE project_id = ? AND status = ? AND env = ?',
-      [project.id, 'running', 'production']
-    );
-    const stopped = await all(
-      'SELECT * FROM deployments WHERE project_id = ? AND status = ? AND env = ? ORDER BY created_at DESC LIMIT 3',
-      [project.id, 'stopped', 'production']
-    );
-    if (!stopped.length) { console.error('No previous deployments available.'); return; }
-
-    const target = stopped[0];
-    console.log(`Rolling back to deployment from ${target.created_at}...`);
-    if (running) await run('UPDATE deployments SET status = ? WHERE id = ?', ['stopped', running.id]);
-    await run('UPDATE deployments SET status = ? WHERE id = ?', ['running', target.id]);
-    await generateAndReload();
-    console.log('Rollback complete.');
+    const { sessionToken } = requireAuth();
+    const { project } = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+    const data = await daemonPost(`/api/projects/${project.id}/rollback`, sessionToken, {});
+    console.log(data.message);
+    console.log(`Restored deployment from: ${data.deployedAt}`);
   });
 
 program.parse(process.argv);
