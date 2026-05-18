@@ -23,15 +23,15 @@ program
   .action(async () => {
     const daemonPath = path.join(__dirname, 'daemon.js');
     console.log('Starting daemon...');
-    
+
     const child = spawn('node', [daemonPath], {
       detached: true,
       stdio: 'ignore'
     });
-    
+
     child.unref();
     console.log('Daemon started in background.');
-    
+
     console.log('Ensuring Caddy is running...');
     await startCaddy();
     console.log('Caddy is ready.');
@@ -44,9 +44,9 @@ program
     await initDB();
     const token = uuidv4();
     const id = uuidv4();
-    
+
     await run('INSERT INTO users (id, token) VALUES (?, ?)', [id, token]);
-    
+
     const authPath = path.join(require('os').homedir(), '.mini-vercel-auth.json');
     fs.writeFileSync(authPath, JSON.stringify({ token }));
     console.log(`Logged in successfully! Token saved to ${authPath}`);
@@ -79,19 +79,19 @@ program
     }
   });
 
+
 program
   .command('deploy')
   .description('Manually trigger a Docker build and deployment')
   .action(async () => {
     await initDB();
     const cwd = process.cwd();
-    
+
     const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
     if (!project) {
       console.error('Error: Project not found. Run "mini-vercel link" first.');
       process.exit(1);
     }
-    
     try {
       await deployProject({
         project,
@@ -102,6 +102,7 @@ program
       console.error('Deployment failed:', err);
     }
   });
+
 
 program
   .command('list')
@@ -116,7 +117,7 @@ program
         SELECT MAX(created_at) FROM deployments WHERE project_id = p.id
       ) OR d.id IS NULL
     `);
-    
+
     console.log('Active Projects:');
     console.table(projects.map(p => ({
       Project: p.name,
@@ -186,7 +187,7 @@ envCmd
       console.log('No environment variables found for this project.');
       return;
     }
-    
+
     const envContent = envVars.map(row => `${row.key}=${row.value}`).join('\n');
     fs.writeFileSync(path.join(cwd, '.env'), envContent);
     console.log(`Successfully pulled ${envVars.length} environment variables to .env file.`);
@@ -198,7 +199,7 @@ program
   .option('-f, --follow', 'Follow log output')
   .action(async (projectName, options) => {
     await initDB();
-    
+
     let queryProject;
     if (projectName) {
       queryProject = await get('SELECT * FROM projects WHERE name = ?', [projectName]);
@@ -227,6 +228,74 @@ program
     } catch (err: any) {
       console.error('Failed to fetch logs:', err);
     }
+  });
+
+const domainCmd = program
+  .command('domain')
+  .description('Manage custom domains for the current project');
+
+domainCmd
+  .command('add <domain>')
+  .description('Add a custom domain to the project')
+  .action(async (domain) => {
+    await initDB();
+    const cwd = process.cwd();
+    const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
+    if (!project) {
+      console.error('Error: Project not found.');
+      process.exit(1);
+    }
+    await run('UPDATE projects SET custom_domain = ? WHERE id = ?', [domain, project.id]);
+    console.log(`Custom domain ${domain} added to project "${project.name}".`);
+    await generateAndReload();
+  });
+
+domainCmd
+  .command('rm')
+  .description('Remove the custom domain from the project')
+  .action(async () => {
+    await initDB();
+    const cwd = process.cwd();
+    const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
+    if (!project) {
+      console.error('Error: Project not found.');
+      process.exit(1);
+    }
+    await run('UPDATE projects SET custom_domain = NULL WHERE id = ?', [project.id]);
+    console.log(`Custom domain removed from project "${project.name}".`);
+    await generateAndReload();
+  });
+
+program
+  .command('rollback')
+  .description('Rollback to a previous deployment')
+  .action(async () => {
+    await initDB();
+    const cwd = process.cwd();
+    const project = await get('SELECT * FROM projects WHERE path = ?', [cwd]);
+    if (!project) {
+      console.error('Error: Project not found.');
+      process.exit(1);
+    }
+
+    const running = await get('SELECT * FROM deployments WHERE project_id = ? AND status = ? AND env = ?', [project.id, 'running', 'production']);
+    const stopped = await all('SELECT * FROM deployments WHERE project_id = ? AND status = ? AND env = ? ORDER BY created_at DESC LIMIT 3', [project.id, 'stopped', 'production']);
+
+    if (stopped.length === 0) {
+      console.error('No previous deployments available for rollback.');
+      return;
+    }
+
+    const target = stopped[0];
+    console.log(`Rolling back project "${project.name}" to deployment from ${target.created_at}...`);
+    
+    if (running) {
+      await run('UPDATE deployments SET status = ? WHERE id = ?', ['stopped', running.id]);
+    }
+    await run('UPDATE deployments SET status = ? WHERE id = ?', ['running', target.id]);
+
+    await generateAndReload();
+    console.log('Rollback complete! The older deployment is now active.');
   });
 
 program.parse(process.argv);

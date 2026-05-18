@@ -14,7 +14,6 @@ export async function startCaddy(): Promise<void> {
   if (!fs.existsSync(CADDYFILE_PATH)) {
     fs.writeFileSync(CADDYFILE_PATH, '');
   }
-
   try {
     const container = docker.getContainer(CADDY_CONTAINER_NAME);
     const info = await container.inspect();
@@ -34,7 +33,7 @@ export async function startCaddy(): Promise<void> {
       if (err) return reject(err);
       docker.modem.followProgress(stream, onFinished, onProgress);
       function onFinished(err: any) { if (err) reject(err); else resolve(null); }
-      function onProgress(event: any) {}
+      function onProgress(event: any) { }
     });
   });
 
@@ -51,14 +50,13 @@ export async function startCaddy(): Promise<void> {
       ]
     }
   });
-
   await container.start();
 }
 
 export async function generateCaddyfile(): Promise<void> {
   // Fetch active production deployments
   const prodDeployments = await all(`
-    SELECT p.name, d.port 
+    SELECT p.name, p.custom_domain, d.port 
     FROM projects p
     JOIN deployments d ON p.id = d.project_id
     WHERE d.status = 'running'
@@ -90,6 +88,13 @@ http://${dep.name}.localhost:${HTTP_PORT} {
   reverse_proxy host.docker.internal:${dep.port}
 }
 `;
+    if (dep.custom_domain) {
+      caddyConfig += `
+http://${dep.custom_domain}:${HTTP_PORT} {
+  reverse_proxy host.docker.internal:${dep.port}
+}
+`;
+    }
   }
 
   for (const dep of previewDeployments) {

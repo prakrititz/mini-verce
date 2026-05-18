@@ -52,14 +52,20 @@ export async function startContainer(imageName: string, port: number, containerN
   return container.id;
 }
 
-export async function stopContainer(containerId: string): Promise<void> {
+export async function stopContainer(containerId: string, remove: boolean = true): Promise<void> {
   try {
     const container = docker.getContainer(containerId);
-    await container.stop();
-    await container.remove();
+    try {
+      await container.stop();
+    } catch (err: any) {
+      if (err.statusCode !== 304) throw err; // 304 is already stopped
+    }
+    if (remove) {
+      await container.remove();
+    }
   } catch (err: any) {
     if (err.statusCode !== 404) {
-      console.error(`Failed to stop container ${containerId}:`, err);
+      console.error(`Failed to stop/remove container ${containerId}:`, err);
     }
   }
 }

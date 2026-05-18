@@ -73,6 +73,10 @@ export async function initDB() {
     await run("ALTER TABLE deployments ADD COLUMN url TEXT");
   } catch (_) {}
 
+  try {
+    await run("ALTER TABLE projects ADD COLUMN custom_domain TEXT");
+  } catch (_) {}
+
   await run(`
     CREATE TABLE IF NOT EXISTS env_vars (
       id TEXT PRIMARY KEY,

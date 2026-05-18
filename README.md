@@ -1,5 +1,8 @@
 # Mini-Vercel (Self-Hosted PaaS)
 
+[![Architecture Diagram](./overview.svg)](./overview.svg)
+*(Click the diagram to open it in full screen for zooming and panning)*
+
 Mini-Vercel is an open-source, self-hosted Platform-as-a-Service (PaaS) designed to emulate the developer experience of Vercel. It is built to run efficiently on resource-constrained hardware (like an older laptop) while providing magical, zero-downtime deployments.
 
 ## Architecture & Tech Stack
@@ -99,4 +102,4 @@ This project is being built in stages:
 - [x] **Stage 3: Zero-Config Framework Detection** (Auto-generating Dockerfiles for Next.js, Vite, Node)
 - [x] **Stage 4: Continuous Delivery** (GitHub Webhooks & FIFO Build Queue)
 - [x] **Stage 5: Environment Variables & Logs** (Managing secrets)
-- [ ] **Stage 6: Advanced PaaS Features** (Rollbacks, PR Previews, Custom Domains)
+- [x] **Stage 6: Advanced PaaS Features** (Rollbacks, PR Previews, Custom Domains)

@@ -117,26 +117,26 @@ app.post('/webhooks/github', webhookLimiter, verifyGitHubSignature, async (req: 
     const targetRepoUrl = repoCloneUrl || repoHtmlUrl;
 
     // Acknowledge immediately to prevent GitHub delivery timeouts while enqueued
-    res.status(202).json({ 
-      message: 'Production deployment task enqueued successfully', 
-      buildId, 
-      project: project.name 
+    res.status(202).json({
+      message: 'Production deployment task enqueued successfully',
+      buildId,
+      project: project.name
     });
 
     buildQueue.enqueue(async () => {
       const tempDir = path.join(process.cwd(), '.temp-builds', buildId);
       try {
         console.log(`[Queue] Pulling source and building production deployment for "${project.name}"...`);
-        
+
         // Fast shallow clone into unique temp build directory
         await execAsync(`git clone --depth 1 ${targetRepoUrl} "${tempDir}"`);
-        
+
         await deployProject({
           project,
           sourcePath: tempDir,
           env: 'production'
         });
-        
+
         console.log(`[Queue] Production deployment completed successfully for "${project.name}".`);
       } catch (err) {
         console.error(`[Queue] Deployment pipeline failure for "${project.name}":`, err);
@@ -159,32 +159,32 @@ app.post('/webhooks/github', webhookLimiter, verifyGitHubSignature, async (req: 
 
     const customUrl = `pr-${prNumber}.${project.name}.localhost`;
 
-    if (action === 'opened' || action === 'synchronize') {
+    if (action === 'opened' || action === 'synchronize' || action === 'reopened') {
       if (!prHeadRepoUrl || !prBranch) {
         return res.status(400).json({ error: 'Pull request head origin details missing' });
       }
 
       const buildId = uuidv4();
-      res.status(202).json({ 
-        message: `Preview environment deployment enqueued for PR #${prNumber}`, 
-        buildId, 
-        previewUrl: `http://${customUrl}:8080` 
+      res.status(202).json({
+        message: `Preview environment deployment enqueued for PR #${prNumber}`,
+        buildId,
+        previewUrl: `http://${customUrl}:8080`
       });
 
       buildQueue.enqueue(async () => {
         const tempDir = path.join(process.cwd(), '.temp-builds', buildId);
         try {
           console.log(`[Queue] Building Preview Environment for PR #${prNumber} of "${project.name}"...`);
-          
+
           await execAsync(`git clone --depth 1 --branch ${prBranch} ${prHeadRepoUrl} "${tempDir}"`);
-          
+
           await deployProject({
             project,
             sourcePath: tempDir,
             env: 'preview',
             customUrl
           });
-          
+
           console.log(`[Queue] Preview environment ready at http://${customUrl}:8080`);
         } catch (err) {
           console.error(`[Queue] Preview deployment failed for PR #${prNumber}:`, err);
@@ -224,6 +224,21 @@ app.post('/webhooks/github', webhookLimiter, verifyGitHubSignature, async (req: 
     res.json({ message: `GitHub event type "${event}" received but ignored.` });
   }
 });
+
+setInterval(async () => {
+  try {
+    console.log('[Maintenance] Running automated system cleanup...');
+    await execAsync('docker system prune -f');
+    await run(`
+      DELETE FROM deployments 
+      WHERE status = 'stopped' 
+      AND created_at < datetime('now', '-7 days')
+    `);
+    console.log('[Maintenance] System cleanup complete.');
+  } catch (err) {
+    console.error('[Maintenance] System cleanup failed:', err);
+  }
+}, 60 * 60 * 1000); // 1 hour
 
 async function start() {
   await initDB();

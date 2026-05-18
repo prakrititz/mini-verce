@@ -22,7 +22,6 @@ export interface DeployResult {
   port: number;
   url: string;
 }
-
 /**
  * Core deployment engine decoupled from the CLI.
  * Builds, deploys, and updates routing for a project smoothly using Blue-Green strategy.
@@ -72,27 +71,35 @@ export async function deployProject(options: DeployOptions): Promise<DeployResul
   console.log('Updating proxy routing configuration...');
   await generateAndReload();
 
-  // 7. Blue-Green cleanup: gracefully stop and remove older running containers for this specific target
+  // 7. Blue-Green cleanup: gracefully stop and retain recent containers for rollbacks
   console.log('Performing blue-green deployment cleanup...');
-  let oldDeployments: any[] = [];
+  let allOldDeployments: any[] = [];
   if (env === 'production') {
-    oldDeployments = await all(
-      'SELECT * FROM deployments WHERE project_id = ? AND status = ? AND env = ? AND id != ?',
-      [project.id, 'running', 'production', deploymentId]
+    allOldDeployments = await all(
+      'SELECT * FROM deployments WHERE project_id = ? AND env = ? AND id != ? ORDER BY created_at DESC',
+      [project.id, 'production', deploymentId]
     );
   } else {
-    oldDeployments = await all(
-      'SELECT * FROM deployments WHERE project_id = ? AND status = ? AND env = ? AND url = ? AND id != ?',
-      [project.id, 'running', 'preview', customUrl, deploymentId]
+    allOldDeployments = await all(
+      'SELECT * FROM deployments WHERE project_id = ? AND env = ? AND url = ? AND id != ? ORDER BY created_at DESC',
+      [project.id, 'preview', customUrl, deploymentId]
     );
   }
 
-  for (const oldDep of oldDeployments) {
-    if (oldDep.container_id) {
-      console.log(`Stopping previous container: ${oldDep.container_id}`);
-      await stopContainer(oldDep.container_id);
+  for (let i = 0; i < allOldDeployments.length; i++) {
+    const oldDep = allOldDeployments[i];
+    const shouldRemove = i >= 3; // retain up to 3 older deployments (stop but don't remove)
+    
+    if (oldDep.status === 'running') {
+      console.log(`Stopping previous container: ${oldDep.container_id} (Remove: ${shouldRemove})`);
+      if (oldDep.container_id) await stopContainer(oldDep.container_id, shouldRemove);
+      await run('UPDATE deployments SET status = ? WHERE id = ?', ['stopped', oldDep.id]);
+    } else if (shouldRemove && oldDep.status === 'stopped') {
+      if (oldDep.container_id) {
+        console.log(`Removing old stopped container: ${oldDep.container_id}`);
+        await stopContainer(oldDep.container_id, true);
+      }
     }
-    await run('UPDATE deployments SET status = ? WHERE id = ?', ['stopped', oldDep.id]);
   }
 
   const finalUrl = env === 'preview' && customUrl 
@@ -109,3 +116,4 @@ export async function deployProject(options: DeployOptions): Promise<DeployResul
     url: finalUrl
   };
 }
+
