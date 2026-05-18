@@ -15,7 +15,7 @@ import { initDB, all, get, run } from './db';
 import { buildQueue } from './queue';
 import { deployProject } from './deployer';
 import { stopContainer } from './docker';
-import { generateAndReload } from './caddy';
+import { generateAndReload, getCaddyMode, trustLocalCA } from './caddy';
 
 const execAsync = util.promisify(exec);
 
@@ -35,6 +35,38 @@ app.get('/health', (_req, res) => {
 
 app.get('/api/queue', (_req, res) => {
   res.json({ length: buildQueue.getLength(), isBusy: buildQueue.isBusy() });
+});
+
+// ── Phase 5: Caddy mode & trust endpoints (public — no auth needed) ───────────
+
+/**
+ * GET /api/caddy/mode
+ * Returns the current Caddy TLS mode (local | public).
+ */
+app.get('/api/caddy/mode', (_req, res) => {
+  res.json({
+    mode: getCaddyMode(),
+    description: getCaddyMode() === 'local'
+      ? 'Caddy local CA — tls internal (set CADDY_MODE=public for Let\'s Encrypt)'
+      : 'Let\'s Encrypt — bare hostnames, auto TLS',
+    httpPort:  process.env.CADDY_HTTP_PORT  || 80,
+    httpsPort: process.env.CADDY_HTTPS_PORT || 443,
+  });
+});
+
+/**
+ * POST /api/caddy/trust
+ * Runs `caddy trust` inside the Caddy container to install the local CA.
+ * Only meaningful in local mode. Safe to call multiple times.
+ */
+app.post('/api/caddy/trust', async (_req, res) => {
+  try {
+    const output = await trustLocalCA();
+    console.log('[Caddy] trust output:', output);
+    res.json({ message: 'Local CA trusted successfully.', output });
+  } catch (err: any) {
+    res.status(500).json({ error: `caddy trust failed: ${err.message}` });
+  }
 });
 
 // ── Phase 1: Auth rate limiter ────────────────────────────────────────────────
@@ -568,6 +600,171 @@ app.delete('/api/projects/:id/env/:key', verifySessionToken, async (req: Request
   await run('DELETE FROM env_vars WHERE project_id = ? AND key = ?', [project.id, req.params.key as string]);
   res.json({ message: `Removed ${req.params.key}.` });
 });
+
+// ── Phase 4 Option B: GitHub OAuth flow ──────────────────────────────────────
+//
+// Prerequisites (set in .env):
+//   GITHUB_CLIENT_ID     = <your OAuth App client id>
+//   GITHUB_CLIENT_SECRET = <your OAuth App client secret>
+//   GITHUB_CALLBACK_URL  = http://localhost:4000/auth/github/callback  (or public URL)
+//
+// Register at: https://github.com/settings/applications/new
+
+/**
+ * In-memory CSRF state store:  state → { userId, expiresAt }
+ * Entries expire after 10 minutes and are cleaned up on each new request.
+ */
+const oauthStateStore = new Map<string, { userId: string; expiresAt: number }>();
+
+function pruneOAuthState() {
+  const now = Date.now();
+  for (const [k, v] of oauthStateStore) {
+    if (v.expiresAt < now) oauthStateStore.delete(k);
+  }
+}
+
+/**
+ * GET /auth/github/start
+ * Initiates the OAuth flow.  Requires a valid session — the state is tied to
+ * the calling user so the callback can update the right account.
+ * Redirects the browser to GitHub's authorization page.
+ */
+app.get('/auth/github/start', verifySessionToken, (req: Request, res: Response) => {
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  if (!clientId) {
+    return res.status(503).json({
+      error: 'GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env.'
+    });
+  }
+
+  pruneOAuthState();
+
+  const state     = crypto.randomBytes(16).toString('hex');
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+  oauthStateStore.set(state, { userId: (req as any).userId, expiresAt });
+
+  const callbackUrl = process.env.GITHUB_CALLBACK_URL || `http://localhost:${PORT}/auth/github/callback`;
+  const params = new URLSearchParams({
+    client_id:    clientId,
+    redirect_uri: callbackUrl,
+    scope:        'repo admin:repo_hook read:user user:email',
+    state,
+  });
+
+  const authorizeUrl = `https://github.com/login/oauth/authorize?${params}`;
+  console.log(`[GitHub OAuth] Redirecting user ${(req as any).userId} to GitHub…`);
+  res.redirect(authorizeUrl);
+});
+
+/**
+ * GET /auth/github/callback
+ * GitHub redirects here after the user approves the OAuth App.
+ * Exchanges the `code` for an access token, validates CSRF state,
+ * stores the token (AES-256 encrypted) and GitHub username on the user record.
+ *
+ * On success, renders a tiny HTML page the user can close.
+ */
+app.get('/auth/github/callback', async (req: Request, res: Response) => {
+  const nodeFetch = require('node-fetch');
+  const fetch     = nodeFetch.default || nodeFetch;
+
+  const { code, state, error: ghError } = req.query as Record<string, string>;
+
+  if (ghError) {
+    return res.status(400).send(oauthPage('❌ GitHub authorization denied.', ghError, false));
+  }
+  if (!code || !state) {
+    return res.status(400).send(oauthPage('❌ Invalid callback.', 'Missing code or state parameter.', false));
+  }
+
+  pruneOAuthState();
+
+  const stored = oauthStateStore.get(state);
+  if (!stored || stored.expiresAt < Date.now()) {
+    return res.status(400).send(oauthPage('❌ State mismatch.', 'OAuth state expired or invalid. Please try again.', false));
+  }
+  oauthStateStore.delete(state);
+
+  const { userId } = stored;
+
+  // Exchange code for access_token
+  const clientId     = process.env.GITHUB_CLIENT_ID!;
+  const clientSecret = process.env.GITHUB_CLIENT_SECRET!;
+  const callbackUrl  = process.env.GITHUB_CALLBACK_URL || `http://localhost:${PORT}/auth/github/callback`;
+
+  let accessToken: string;
+  try {
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept:         'application/json',
+      },
+      body: JSON.stringify({
+        client_id:     clientId,
+        client_secret: clientSecret,
+        code,
+        redirect_uri:  callbackUrl,
+      }),
+    });
+    const tokenData = await tokenRes.json() as any;
+    if (tokenData.error || !tokenData.access_token) {
+      throw new Error(tokenData.error_description || tokenData.error || 'Token exchange failed');
+    }
+    accessToken = tokenData.access_token;
+  } catch (err: any) {
+    console.error('[GitHub OAuth] Token exchange failed:', err.message);
+    return res.status(502).send(oauthPage('❌ Token exchange failed.', err.message, false));
+  }
+
+  // Validate token and get GitHub user info
+  let ghUser: { login: string; name: string | null };
+  try {
+    ghUser = await validateGitHubPAT(accessToken); // reuses existing helper
+  } catch (err: any) {
+    console.error('[GitHub OAuth] Token validation failed:', err.message);
+    return res.status(502).send(oauthPage('❌ Token validation failed.', err.message, false));
+  }
+
+  // Encrypt and persist
+  const encryptedToken = encryptPAT(accessToken);
+  await run(
+    'UPDATE users SET github_username = ?, github_pat_encrypted = ? WHERE id = ?',
+    [ghUser.login, encryptedToken, userId]
+  );
+
+  console.log(`[GitHub OAuth] Linked @${ghUser.login} to user ${userId}`);
+  res.send(oauthPage(
+    `✓ Connected as @${ghUser.login}`,
+    'You can close this tab and return to the terminal.',
+    true
+  ));
+});
+
+/** Tiny self-closing HTML page shown at the end of the OAuth callback. */
+function oauthPage(heading: string, body: string, success: boolean): string {
+  const color = success ? '#22c55e' : '#ef4444';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>mini-vercel GitHub Auth</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display:flex; align-items:center;
+           justify-content:center; min-height:100vh; margin:0; background:#0f172a; color:#f1f5f9; }
+    .card { background:#1e293b; border-radius:12px; padding:2.5rem 3rem; text-align:center; max-width:420px; }
+    h1 { color:${color}; font-size:1.5rem; margin-bottom:.75rem; }
+    p  { color:#94a3b8; margin:0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>${heading}</h1>
+    <p>${body}</p>
+  </div>
+</body>
+</html>`;
+}
 
 // ── GitHub webhook (public — HMAC instead of session) ────────────────────────
 

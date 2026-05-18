@@ -131,6 +131,56 @@ program
     console.log('Caddy is ready.');
   });
 
+// ── caddy ─────────────────────────────────────────────────────────────────────
+
+const caddyCmd = program
+  .command('caddy')
+  .description('Manage Caddy TLS configuration');
+
+caddyCmd
+  .command('trust')
+  .description('Install Caddy local CA into the system trust store (run once, local mode only)')
+  .action(async () => {
+    const f = fetch();
+    let data: any;
+    try {
+      const res = await f(`${DAEMON_URL}/api/caddy/trust`, { method: 'POST' });
+      data = await res.json();
+    } catch {
+      console.error('Could not reach the daemon. Is it running? Run "mini-vercel start-daemon".');
+      process.exit(1);
+    }
+    if (data.error) { console.error(`Error: ${data.error}`); process.exit(1); }
+    console.log('✓', data.message);
+    if (data.output) console.log(data.output);
+  });
+
+caddyCmd
+  .command('mode')
+  .description('Show current Caddy TLS mode and port configuration')
+  .action(async () => {
+    const f = fetch();
+    let data: any;
+    try {
+      const res = await f(`${DAEMON_URL}/api/caddy/mode`);
+      data = await res.json();
+    } catch {
+      console.error('Could not reach the daemon. Is it running? Run "mini-vercel start-daemon".');
+      process.exit(1);
+    }
+    console.log(`Mode:        ${data.mode}`);
+    console.log(`Description: ${data.description}`);
+    console.log(`HTTP port:   ${data.httpPort}`);
+    console.log(`HTTPS port:  ${data.httpsPort}`);
+    console.log('');
+    if (data.mode === 'local') {
+      console.log('Tip: run "mini-vercel caddy trust" once to install the local CA.');
+      console.log('     Then visit https://<project>.localhost in your browser.');
+    } else {
+      console.log('Tip: set CADDY_MODE=local in your .env for local development.');
+    }
+  });
+
 // ── signup ────────────────────────────────────────────────────────────────────
 
 program
@@ -241,6 +291,70 @@ githubCmd
     const { sessionToken } = requireAuth();
     await daemonDelete('/auth/github/disconnect', sessionToken);
     console.log('GitHub account disconnected.');
+  });
+
+githubCmd
+  .command('oauth')
+  .description('Link your GitHub account via OAuth (Option B — requires OAuth App in .env)')
+  .action(async () => {
+    const { sessionToken } = requireAuth();
+    const f = fetch();
+
+    // Check if OAuth is configured on the daemon side first
+    const modeCheck = await f(`${DAEMON_URL}/auth/github/start`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${sessionToken}` },
+      redirect: 'manual', // don't follow the redirect — we want the URL
+    });
+
+    if (modeCheck.status === 503) {
+      const data = await modeCheck.json();
+      console.error(`Error: ${(data as any).error}`);
+      console.error('Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in your .env file.');
+      console.error('Register an OAuth App at: https://github.com/settings/applications/new');
+      process.exit(1);
+    }
+
+    // The daemon replied with a 302 → extract the Location header
+    const authorizeUrl = modeCheck.headers.get('location');
+    if (!authorizeUrl) {
+      console.error('Unexpected response from daemon. Is the daemon running?');
+      process.exit(1);
+    }
+
+    // Open the browser automatically (cross-platform)
+    const { exec: execCb } = require('child_process');
+    const openCmd = process.platform === 'win32' ? `start "" "${authorizeUrl}"`
+                  : process.platform === 'darwin' ? `open "${authorizeUrl}"`
+                  : `xdg-open "${authorizeUrl}"`;
+    execCb(openCmd);
+
+    console.log('');
+    console.log('Opening GitHub authorization page in your browser…');
+    console.log(`If it didn't open automatically, visit:\n  ${authorizeUrl}`);
+    console.log('');
+    console.log('Waiting for authorization (timeout: 5 minutes)…');
+
+    // Poll github/status until the token appears (set by the callback)
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const statusRes = await f(`${DAEMON_URL}/auth/github/status`, {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        });
+        const status = await statusRes.json() as any;
+        if (status.connected) {
+          console.log(`\n✓ Connected as @${status.githubUsername}`);
+          console.log('You can now run "mini-vercel import" to link repos interactively.');
+          return;
+        }
+      } catch { /* daemon may briefly restart */ }
+    }
+
+    console.error('\nTimeout: GitHub authorization was not completed within 5 minutes.');
+    console.error('Run "mini-vercel github oauth" to try again.');
+    process.exit(1);
   });
 
 // ── import ────────────────────────────────────────────────────────────────────
