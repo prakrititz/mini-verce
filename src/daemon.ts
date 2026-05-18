@@ -147,6 +147,241 @@ async function requireProjectOwner(req: Request, res: Response, projectId: strin
   return project;
 }
 
+// ── Phase 4: GitHub crypto helpers ────────────────────────────────────────────
+
+const CIPHER_ALGO = 'aes-256-cbc';
+
+/**
+ * Derive a 32-byte AES key from the daemon's WEBHOOK_SECRET (or a fallback).
+ * The key is stable per installation — same secret → same key every time.
+ */
+function deriveEncryptionKey(): Buffer {
+  const secret = process.env.WEBHOOK_SECRET || 'mini-vercel-default-enc-key-change-me';
+  return crypto.createHash('sha256').update(secret).digest(); // always 32 bytes
+}
+
+function encryptPAT(pat: string): string {
+  const key = deriveEncryptionKey();
+  const iv  = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(CIPHER_ALGO, key, iv);
+  const encrypted = Buffer.concat([cipher.update(pat, 'utf8'), cipher.final()]);
+  return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+function decryptPAT(stored: string): string {
+  const [ivHex, encHex] = stored.split(':');
+  const key = deriveEncryptionKey();
+  const iv  = Buffer.from(ivHex, 'hex');
+  const enc = Buffer.from(encHex, 'hex');
+  const decipher = crypto.createDecipheriv(CIPHER_ALGO, key, iv);
+  return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+}
+
+/** Validate a PAT against the GitHub API and return the GitHub username. */
+async function validateGitHubPAT(pat: string): Promise<{ login: string; name: string | null }> {
+  const nodeFetch = require('node-fetch');
+  const fetch = nodeFetch.default || nodeFetch;
+  const res = await fetch('https://api.github.com/user', {
+    headers: {
+      Authorization: `token ${pat}`,
+      'User-Agent':  'mini-vercel-paas',
+      Accept:        'application/vnd.github+json',
+    },
+  });
+  if (!res.ok) throw new Error(`GitHub API rejected the PAT (HTTP ${res.status})`);
+  const data = await res.json() as any;
+  return { login: data.login, name: data.name };
+}
+
+/** List repos accessible by the PAT. */
+async function listGitHubRepos(pat: string): Promise<any[]> {
+  const nodeFetch = require('node-fetch');
+  const fetch = nodeFetch.default || nodeFetch;
+  // Fetch up to 100 repos the user has push access to (for linking)
+  const res = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator', {
+    headers: {
+      Authorization: `token ${pat}`,
+      'User-Agent':  'mini-vercel-paas',
+      Accept:        'application/vnd.github+json',
+    },
+  });
+  if (!res.ok) throw new Error(`Failed to list repos (HTTP ${res.status})`);
+  return res.json() as any;
+}
+
+/** Register a webhook on a GitHub repo via the API. */
+async function registerGitHubWebhook(pat: string, owner: string, repo: string, webhookUrl: string, secret: string): Promise<void> {
+  const nodeFetch = require('node-fetch');
+  const fetch = nodeFetch.default || nodeFetch;
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/hooks`, {
+    method: 'POST',
+    headers: {
+      Authorization:  `token ${pat}`,
+      'User-Agent':   'mini-vercel-paas',
+      Accept:         'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name:   'web',
+      active: true,
+      events: ['push', 'pull_request'],
+      config: {
+        url:          webhookUrl,
+        content_type: 'json',
+        secret,
+        insecure_ssl: '0',
+      },
+    }),
+  });
+  // 422 = webhook already exists on that repo — treat as success
+  if (!res.ok && res.status !== 422) {
+    const body = await res.json() as any;
+    throw new Error(`Failed to register webhook: ${body.message || res.status}`);
+  }
+}
+
+// ── Phase 4: GitHub account endpoints ────────────────────────────────────────
+
+/**
+ * POST /auth/github/connect
+ * Body: { pat }  — GitHub Personal Access Token
+ * Validates PAT, encrypts it with AES-256, stores it in users table.
+ */
+app.post('/auth/github/connect', verifySessionToken, async (req: Request, res: Response) => {
+  const { pat } = req.body;
+  if (!pat || typeof pat !== 'string' || pat.trim().length < 10) {
+    return res.status(400).json({ error: 'A valid GitHub Personal Access Token is required.' });
+  }
+
+  let ghUser: { login: string; name: string | null };
+  try {
+    ghUser = await validateGitHubPAT(pat.trim());
+  } catch (err: any) {
+    return res.status(401).json({ error: err.message });
+  }
+
+  const encryptedPAT = encryptPAT(pat.trim());
+  const userId = (req as any).userId;
+  await run(
+    'UPDATE users SET github_username = ?, github_pat_encrypted = ? WHERE id = ?',
+    [ghUser.login, encryptedPAT, userId]
+  );
+
+  console.log(`[GitHub] Linked GitHub account @${ghUser.login} to user ${userId}`);
+  res.json({ message: `Connected as @${ghUser.login}`, githubUsername: ghUser.login });
+});
+
+/**
+ * DELETE /auth/github/disconnect
+ * Removes the stored GitHub PAT and username for the authenticated user.
+ */
+app.delete('/auth/github/disconnect', verifySessionToken, async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  await run('UPDATE users SET github_username = NULL, github_pat_encrypted = NULL WHERE id = ?', [userId]);
+  console.log(`[GitHub] Disconnected GitHub from user ${userId}`);
+  res.json({ message: 'GitHub account disconnected.' });
+});
+
+/**
+ * GET /auth/github/status
+ * Returns whether GitHub is linked for the authenticated user.
+ */
+app.get('/auth/github/status', verifySessionToken, async (req: Request, res: Response) => {
+  const user = await get('SELECT github_username FROM users WHERE id = ?', [(req as any).userId]);
+  if (!user?.github_username) {
+    return res.json({ connected: false });
+  }
+  res.json({ connected: true, githubUsername: user.github_username });
+});
+
+/**
+ * GET /api/github/repos
+ * Lists repos accessible by the authenticated user's stored PAT.
+ */
+app.get('/api/github/repos', verifySessionToken, async (req: Request, res: Response) => {
+  const user = await get('SELECT github_pat_encrypted FROM users WHERE id = ?', [(req as any).userId]);
+  if (!user?.github_pat_encrypted) {
+    return res.status(400).json({ error: 'No GitHub account connected. Run "mini-vercel github connect".' });
+  }
+
+  try {
+    const pat   = decryptPAT(user.github_pat_encrypted);
+    const repos = await listGitHubRepos(pat);
+    res.json({ repos: repos.map((r: any) => ({
+      name:          r.name,
+      fullName:      r.full_name,
+      cloneUrl:      r.clone_url,
+      sshUrl:        r.ssh_url,
+      private:       r.private,
+      defaultBranch: r.default_branch,
+      updatedAt:     r.updated_at,
+    }))});
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/projects/link-github
+ * Links a project AND auto-registers the GitHub webhook in one step.
+ * Body: { name, path, repoFullName }   — e.g. repoFullName = "prakrititz/my-app"
+ */
+app.post('/api/projects/link-github', verifySessionToken, async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const { name, path: projectPath, repoFullName } = req.body;
+
+  if (!name || !projectPath || !repoFullName) {
+    return res.status(400).json({ error: 'name, path, and repoFullName are required.' });
+  }
+
+  const user = await get('SELECT github_username, github_pat_encrypted FROM users WHERE id = ?', [userId]);
+  if (!user?.github_pat_encrypted) {
+    return res.status(400).json({ error: 'No GitHub account connected. Run "mini-vercel github connect" first.' });
+  }
+
+  const pat  = decryptPAT(user.github_pat_encrypted);
+  const cloneUrl = `https://github.com/${repoFullName}.git`;
+
+  // Create the project record
+  const existing = await get('SELECT id FROM projects WHERE name = ?', [name]);
+  if (existing) {
+    return res.status(409).json({ error: `Project name "${name}" already exists.` });
+  }
+
+  const projectId = uuidv4();
+  await run(
+    'INSERT INTO projects (id, name, path, repository_url, owner_id) VALUES (?, ?, ?, ?, ?)',
+    [projectId, name, projectPath, cloneUrl, userId]
+  );
+
+  // Auto-register the GitHub webhook
+  const [owner, repo] = repoFullName.split('/');
+  const webhookSecret = process.env.WEBHOOK_SECRET || '';
+  const daemonPort    = process.env.DAEMON_PORT || 4000;
+  // Use the user-configured public URL or fall back to localhost (useful with ngrok)
+  const webhookUrl    = process.env.PUBLIC_URL
+    ? `${process.env.PUBLIC_URL}/webhooks/github`
+    : `http://localhost:${daemonPort}/webhooks/github`;
+
+  let webhookStatus = 'skipped';
+  try {
+    await registerGitHubWebhook(pat, owner, repo, webhookUrl, webhookSecret);
+    webhookStatus = 'registered';
+    console.log(`[GitHub] Webhook registered for ${repoFullName} → ${webhookUrl}`);
+  } catch (err: any) {
+    console.warn(`[GitHub] Webhook registration failed: ${err.message}`);
+    webhookStatus = `failed: ${err.message}`;
+  }
+
+  res.status(201).json({
+    projectId,
+    name,
+    repoFullName,
+    cloneUrl,
+    webhookStatus,
+  });
+});
+
 // ── Phase 2+3: Project API (all routes require a valid session) ───────────────
 
 /**

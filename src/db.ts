@@ -41,12 +41,15 @@ export async function initDB() {
   // ── Core tables ──────────────────────────────────────────────────────────
 
   // Phase 1: Real identity — email + bcrypt password, no more random UUIDs
+  // Phase 4: GitHub linking columns (nullable — set after github connect)
   await run(`
     CREATE TABLE IF NOT EXISTS users (
-      id            TEXT PRIMARY KEY,
-      email         TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+      id                  TEXT PRIMARY KEY,
+      email               TEXT UNIQUE NOT NULL,
+      password_hash       TEXT NOT NULL,
+      github_username     TEXT,
+      github_pat_encrypted TEXT,
+      created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -109,6 +112,9 @@ export async function initDB() {
     "ALTER TABLE users ADD COLUMN password_hash TEXT",
     // Phase 2: project ownership
     "ALTER TABLE projects ADD COLUMN owner_id TEXT REFERENCES users(id)",
+    // Phase 4: GitHub account linking
+    "ALTER TABLE users ADD COLUMN github_username TEXT",
+    "ALTER TABLE users ADD COLUMN github_pat_encrypted TEXT",
   ];
 
   for (const sql of migrations) {
