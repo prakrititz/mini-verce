@@ -153,15 +153,15 @@ The V2 roadmap shifts from a folder-centric model to an **identity-centric** pla
 
 | Priority | Phase | Description | Status |
 |---|---|---|---|
-| 🔴 Critical | **Phase 1 — Real Local Identity** | Replace random-UUID login with persistent `signup`/`login`/`logout` backed by bcrypt + sessions | ✅ Done |
-| 🔴 Critical | **Phase 2 — Project Ownership** | Projects belong to users; all mutations require ownership validation | ✅ Done |
-| 🔴 Critical | **Phase 3 — Session Auth Middleware** | Daemon-side `verifySessionToken` middleware protects all destructive routes | ✅ Done |
-| 🟠 High | **Phase 4 — GitHub Account Linking** | `mini-vercel github connect` — PAT-based linking (AES-256 encrypted), repo list, webhook auto-registration, `import` command | ✅ Done |
-| 🟠 High | **Phase 5 — Real HTTPS** | Caddy local CA (`tls internal`) for localhost + automatic Let's Encrypt for public domains; `caddy trust` & `caddy mode` commands | ✅ Done |
-| 🟠 High | **Phase 6 — Local Project Dashboard** | Web UI at `http://localhost:4000/dashboard` with live SSE log streaming, rollback controls, build queue state | 🔲 Planned |
-| 🟡 Medium | **Phase 7 — Deployment Management Commands** | `status`, `stop`, `restart`, `rollback`, `ps` — full lifecycle control from the CLI | 🔲 Planned |
-| 🟠 High | **Phase 8 — Container Resource Safety** | Hard memory/CPU limits on every container; per-project overrides via `minivercel.json`; health-check-gated blue-green | 🔲 Planned |
-| 🟢 Low | **Phase 9 — Smarter Build System** | Docker layer caching, BuildKit, auto `.dockerignore`, incremental deploys via commit SHA | 🔲 Planned |
-| 🟢 Low | **Phase 10 — Dev Mode (File Watch)** | `mini-vercel dev` — chokidar-powered file watcher with debounced auto-redeploy | 🔲 Planned |
-| 🟡 Medium | **Phase 11 — Better Domain System** | Relational `domains` table, multi-domain per project, `domain add/rm/list/verify` suite, DNS propagation check | 🔲 Planned |
-| 🟢 Low | **Phase 12 — Plugin / Framework Adapter System** | Extensible adapter pattern replacing hardcoded framework detection; community adapter support via `mini-vercel.adapters.json` | 🔲 Planned |
+| **Phase 1 — Real Local Identity** | Replace random-UUID login with persistent `signup`/`login`/`logout` backed by bcrypt + sessions | ✅ Done |
+| **Phase 2 — Project Ownership** | Projects belong to users; all mutations require ownership validation | ✅ Done |
+|  **Phase 3 — Session Auth Middleware** | Daemon-side `verifySessionToken` middleware protects all destructive routes | ✅ Done |
+| **Phase 4 — GitHub Account Linking** | `mini-vercel github connect` — PAT-based linking (AES-256 encrypted), repo list, webhook auto-registration, `import` command | ✅ Done |
+|  **Phase 5 — Real HTTPS** | Caddy local CA (`tls internal`) for localhost + automatic Let's Encrypt for public domains; `caddy trust` & `caddy mode` commands | ✅ Done |
+| **Phase 6 — Local Project Dashboard** | Web UI at `http://localhost:4000/dashboard` with live SSE log streaming, rollback controls, build queue state | 🔲 Planned |
+|  **Phase 7 — Deployment Management Commands** | `status`, `stop`, `restart`, `rollback`, `ps` — full lifecycle control from the CLI | 🔲 Planned |
+|  **Phase 8 — Container Resource Safety** | Hard memory/CPU limits on every container; per-project overrides via `minivercel.json`; health-check-gated blue-green | 🔲 Planned |
+|  **Phase 9 — Smarter Build System** | Docker layer caching, BuildKit, auto `.dockerignore`, incremental deploys via commit SHA | 🔲 Planned |
+|  **Phase 10 — Dev Mode (File Watch)** | `mini-vercel dev` — chokidar-powered file watcher with debounced auto-redeploy | 🔲 Planned |
+|  **Phase 11 — Better Domain System** | Relational `domains` table, multi-domain per project, `domain add/rm/list/verify` suite, DNS propagation check | 🔲 Planned |
+|  **Phase 12 — Plugin / Framework Adapter System** | Extensible adapter pattern replacing hardcoded framework detection; community adapter support via `mini-vercel.adapters.json` | 🔲 Planned |
