@@ -46,19 +46,25 @@ export async function deployProject(options: DeployOptions): Promise<DeployResul
 
   // 2. Find an available port dynamically
   const getPort = (await import('get-port')).default;
-  const port = await getPort();
+  const preferredPort = 8081 + Math.floor(Math.random() * 1000);
+  const port = await getPort({ port: preferredPort });
 
   const timestamp = Date.now();
   const safeEnv = env === 'preview' ? 'pr' : 'prod';
-  const imageName = `mini-vercel-${project.name}-${safeEnv}:${timestamp}`;
-  const containerName = `mini-vercel-app-${project.name}-${safeEnv}-${timestamp}`;
+  const safeProjectName = project.name.toLowerCase();
+  const imageName = `mini-vercel-${safeProjectName}-${safeEnv}:${timestamp}`;
+  const containerName = `mini-vercel-app-${safeProjectName}-${safeEnv}-${timestamp}`;
 
   // 3. Build Docker image
   await buildImage(sourcePath, imageName, buildargs);
 
   // 4. Start Docker container
-  console.log(`Starting container ${containerName} on port ${port}...`);
-  const containerId = await startContainer(imageName, port, containerName, containerEnv);
+  const { detectFramework } = await import('./frameworks');
+  const { framework } = detectFramework(sourcePath);
+  const exposedPort = framework === 'vite' || framework === 'cra' ? 80 : 3000;
+  
+  console.log(`Starting container ${containerName} on port ${port} (mapping to internal ${exposedPort})...`);
+  const containerId = await startContainer(imageName, port, containerName, containerEnv, exposedPort);
 
   // 5. Record deployment in the database
   const deploymentId = uuidv4();

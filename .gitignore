@@ -33,3 +33,5 @@ Thumbs.db
 test-app/
 handout.txt
 *tsbuildinfo
+.env
+GoalGuard

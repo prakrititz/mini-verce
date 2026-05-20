@@ -34,16 +34,14 @@ export async function buildImage(projectPath: string, imageName: string, buildar
   });
 }
 
-export async function startContainer(imageName: string, port: number, containerName: string, env?: string[]): Promise<string> {
+export async function startContainer(imageName: string, port: number, containerName: string, env?: string[], exposedPort: number = 3000): Promise<string> {
   const container = await docker.createContainer({
     Image: imageName,
     name: containerName,
     Env: env || [],
     HostConfig: {
       PortBindings: {
-        '80/tcp': [{ HostPort: port.toString() }],
-        '3000/tcp': [{ HostPort: port.toString() }],
-        '8080/tcp': [{ HostPort: port.toString() }]
+        [`${exposedPort}/tcp`]: [{ HostPort: port.toString() }]
       }
     }
   });
