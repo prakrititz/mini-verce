@@ -1,0 +1,22 @@
+{
+  "name": "orbit-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader runner --force --host 127.0.0.1",
+    "build": "vite build --configLoader runner",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^9.0.0",
+    "@shadergradient/react": "^2.0.34",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "vite": "^7.2.4"
+  }
+}

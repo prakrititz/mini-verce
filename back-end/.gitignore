@@ -4,6 +4,15 @@ node_modules/
 # TypeScript output
 dist/
 
+# Generated per-project Docker assets
+Dockerfile
+.dockerignore
+
+# Local runtime directories created by the daemon
+.temp-builds/
+.caddy-data/
+.caddy-config/
+
 # Local database
 data.sqlite
 data.sqlite-journal
