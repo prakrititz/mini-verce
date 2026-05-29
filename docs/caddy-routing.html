@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Caddy Routing - Mini-Vercel Docs</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="docs.js"></script>
+</head>
+<body data-page="routing">
+  <header class="topbar"><a class="brand" href="index.html">Mini-Vercel Docs</a><form class="search" role="search" action="#" onsubmit="return false;"><label class="sr-only" for="doc-search">Search docs</label><input id="doc-search" type="search" placeholder="Search docs" autocomplete="off" /></form></header>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Documentation navigation"><div class="sidebar-section"><div class="sidebar-title">Start here</div><a href="index.html" data-nav="home">Overview</a><a href="getting-started.html" data-nav="getting-started">Getting started</a><a href="core-workflow.html" data-nav="workflow">Core workflow</a></div><div class="sidebar-section"><div class="sidebar-title">Reference</div><a href="cli-reference.html" data-nav="cli">CLI reference</a><a href="daemon-api.html" data-nav="api">Daemon API</a><a href="database.html" data-nav="database">Database</a><a href="deployment-engine.html" data-nav="deployments">Deployment engine</a><a href="caddy-routing.html" data-nav="routing">Caddy routing</a><a href="operations.html" data-nav="operations">Operations</a></div><div class="sidebar-section"><div class="sidebar-title">More</div><a href="roadmap.html" data-nav="roadmap">Roadmap</a><a href="README.md">Source README</a></div></aside>
+    <main class="content">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span>Caddy routing</span></nav>
+      <article class="card doc-page">
+        <h1>Caddy routing</h1>
+        <p class="lede">Caddy is the local reverse proxy. The branch now supports local TLS with Caddy's internal CA as well as a public mode for real domains.</p>
+        <h2>Modes</h2><ul><li><strong>local</strong> mode writes <code>{ local_certs }</code> at the top of the Caddyfile and appends <code>tls internal</code> to each site block.</li><li><strong>public</strong> mode leaves TLS to Caddy's automatic certificate flow.</li><li><strong>mini-vercel caddy trust</strong> installs the local CA once so <code>https://&lt;project&gt;.localhost</code> works cleanly.</li><li><strong>mini-vercel caddy mode</strong> reports the selected mode and ports.</li></ul>
+        <h2>Routing model</h2><ul><li>Production projects route at <code>https://&lt;project&gt;.localhost</code> in local mode and the bare hostname in public mode.</li><li>Custom domains use the same running container and are emitted as additional site blocks.</li><li>Preview deployments route at <code>pr-&lt;number&gt;.&lt;project&gt;.localhost</code>.</li><li>Each site block reverse proxies to <code>host.docker.internal:&lt;port&gt;</code>.</li></ul>
+        <h2>Reload behavior</h2><p>The daemon rewrites <code>Caddyfile</code> from the current running deployments and then runs <code>caddy reload --config /etc/caddy/Caddyfile --force</code> inside the container.</p>
+        <div class="pager"><a href="deployment-engine.html">Previous: Deployment engine</a><a href="operations.html">Next: Operations</a></div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

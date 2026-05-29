@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Core Workflow - Mini-Vercel Docs</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="docs.js"></script>
+</head>
+<body data-page="workflow">
+  <header class="topbar"><a class="brand" href="index.html">Mini-Vercel Docs</a><form class="search" role="search" action="#" onsubmit="return false;"><label class="sr-only" for="doc-search">Search docs</label><input id="doc-search" type="search" placeholder="Search docs" autocomplete="off" /></form></header>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Documentation navigation"><div class="sidebar-section"><div class="sidebar-title">Start here</div><a href="index.html" data-nav="home">Overview</a><a href="getting-started.html" data-nav="getting-started">Getting started</a><a href="core-workflow.html" data-nav="workflow">Core workflow</a></div><div class="sidebar-section"><div class="sidebar-title">Reference</div><a href="cli-reference.html" data-nav="cli">CLI reference</a><a href="daemon-api.html" data-nav="api">Daemon API</a><a href="database.html" data-nav="database">Database</a><a href="deployment-engine.html" data-nav="deployments">Deployment engine</a><a href="caddy-routing.html" data-nav="routing">Caddy routing</a><a href="operations.html" data-nav="operations">Operations</a></div><div class="sidebar-section"><div class="sidebar-title">More</div><a href="roadmap.html" data-nav="roadmap">Roadmap</a><a href="README.md">Source README</a></div></aside>
+    <main class="content">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span>Core workflow</span></nav>
+      <article class="card doc-page">
+        <h1>Core workflow</h1>
+        <p class="lede">The current branch is centered on local identity, project ownership, and a daemon-driven deploy loop.</p>
+        <ol><li>Start Docker, then run <code>mini-vercel start-daemon</code>.</li><li>Create an account with <code>mini-vercel signup</code> or authenticate with <code>mini-vercel login</code>.</li><li>Link the current directory with <code>mini-vercel link</code> or import a GitHub repo with <code>mini-vercel import</code>.</li><li>Add environment variables if the app needs them.</li><li>Run <code>mini-vercel deploy</code> or trigger a webhook-backed deploy from GitHub.</li><li>Visit the routed local hostname, or use preview URLs for pull requests.</li></ol>
+        <h2>What happens on deploy</h2>
+        <ul><li>The daemon resolves the project by path and enforces ownership.</li><li>Framework detection writes missing Docker assets if needed.</li><li>Environment variables are loaded from SQLite and passed into the build and container.</li><li>The image is built, a free host port is selected, and the container is started.</li><li>Caddy is regenerated and reloaded so traffic flips to the new container.</li></ul>
+        <h2>GitHub flow</h2>
+        <ul><li><code>mini-vercel github connect</code> stores a PAT for repo listing and webhook registration.</li><li><code>mini-vercel github oauth</code> uses the daemon's OAuth callback when configured.</li><li>Pushes to <code>main</code> or <code>master</code> enqueue production deploys.</li><li>Pull request events create or tear down preview deployments.</li></ul>
+        <div class="pager"><a href="getting-started.html">Previous: Getting started</a><a href="cli-reference.html">Next: CLI reference</a></div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

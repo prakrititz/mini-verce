@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Daemon API - Mini-Vercel Docs</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="docs.js"></script>
+</head>
+<body data-page="api">
+  <header class="topbar"><a class="brand" href="index.html">Mini-Vercel Docs</a><form class="search" role="search" action="#" onsubmit="return false;"><label class="sr-only" for="doc-search">Search docs</label><input id="doc-search" type="search" placeholder="Search docs" autocomplete="off" /></form></header>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Documentation navigation"><div class="sidebar-section"><div class="sidebar-title">Start here</div><a href="index.html" data-nav="home">Overview</a><a href="getting-started.html" data-nav="getting-started">Getting started</a><a href="core-workflow.html" data-nav="workflow">Core workflow</a></div><div class="sidebar-section"><div class="sidebar-title">Reference</div><a href="cli-reference.html" data-nav="cli">CLI reference</a><a href="daemon-api.html" data-nav="api">Daemon API</a><a href="database.html" data-nav="database">Database</a><a href="deployment-engine.html" data-nav="deployments">Deployment engine</a><a href="caddy-routing.html" data-nav="routing">Caddy routing</a><a href="operations.html" data-nav="operations">Operations</a></div><div class="sidebar-section"><div class="sidebar-title">More</div><a href="roadmap.html" data-nav="roadmap">Roadmap</a><a href="README.md">Source README</a></div></aside>
+    <main class="content">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span>Daemon API</span></nav>
+      <article class="card doc-page">
+        <h1>Daemon API</h1>
+        <p class="lede">The Express daemon owns auth, project ownership, GitHub integration, webhooks, Caddy control, and deploy execution.</p>
+        <h2>Public routes</h2><ul><li><strong>GET /health</strong> returns daemon and queue status.</li><li><strong>GET /api/queue</strong> reports queue length and busy state.</li><li><strong>GET /api/caddy/mode</strong> returns local or public TLS mode and the exposed ports.</li><li><strong>POST /api/caddy/trust</strong> runs <code>caddy trust</code> inside the container.</li><li><strong>POST /auth/signup</strong>, <strong>/auth/login</strong>, and <strong>/auth/logout</strong> handle sessions.</li><li><strong>POST /webhooks/github</strong> validates GitHub webhooks with HMAC when <code>WEBHOOK_SECRET</code> is set.</li></ul>
+        <h2>Auth and GitHub routes</h2><ul><li><strong>POST /auth/github/connect</strong> validates a PAT and stores encrypted GitHub credentials.</li><li><strong>GET /auth/github/status</strong> reports whether GitHub is connected.</li><li><strong>DELETE /auth/github/disconnect</strong> clears stored GitHub credentials.</li><li><strong>GET /auth/github/start</strong> begins the OAuth redirect flow when configured.</li><li><strong>GET /auth/github/callback</strong> completes the OAuth exchange and stores the encrypted token.</li><li><strong>GET /api/github/repos</strong> lists repos from the connected GitHub account.</li><li><strong>POST /api/projects/link-github</strong> links a selected repo and registers a webhook.</li></ul>
+        <h2>Protected project routes</h2><ul><li><strong>POST /api/projects/link</strong> links the current directory to the logged-in user.</li><li><strong>GET /api/projects</strong> lists only owned projects.</li><li><strong>GET /api/projects/by-path</strong> resolves the current path for the current user.</li><li><strong>GET /api/projects/:id</strong> returns one owned project.</li><li><strong>POST /api/projects/:id/deploy</strong> enqueues a production deployment.</li><li><strong>POST /api/projects/:id/rollback</strong> flips status back to a previous production deployment.</li><li><strong>PATCH /api/projects/:id/domain</strong> sets or clears a custom domain.</li><li><strong>GET /api/projects/:id/env</strong>, <strong>PUT /api/projects/:id/env</strong>, and <strong>DELETE /api/projects/:id/env/:key</strong> manage environment variables.</li></ul>
+        <div class="pager"><a href="cli-reference.html">Previous: CLI reference</a><a href="database.html">Next: Database</a></div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

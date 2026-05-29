@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Operations - Mini-Vercel Docs</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="docs.js"></script>
+</head>
+<body data-page="operations">
+  <header class="topbar"><a class="brand" href="index.html">Mini-Vercel Docs</a><form class="search" role="search" action="#" onsubmit="return false;"><label class="sr-only" for="doc-search">Search docs</label><input id="doc-search" type="search" placeholder="Search docs" autocomplete="off" /></form></header>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Documentation navigation"><div class="sidebar-section"><div class="sidebar-title">Start here</div><a href="index.html" data-nav="home">Overview</a><a href="getting-started.html" data-nav="getting-started">Getting started</a><a href="core-workflow.html" data-nav="workflow">Core workflow</a></div><div class="sidebar-section"><div class="sidebar-title">Reference</div><a href="cli-reference.html" data-nav="cli">CLI reference</a><a href="daemon-api.html" data-nav="api">Daemon API</a><a href="database.html" data-nav="database">Database</a><a href="deployment-engine.html" data-nav="deployments">Deployment engine</a><a href="caddy-routing.html" data-nav="routing">Caddy routing</a><a href="operations.html" data-nav="operations">Operations</a></div><div class="sidebar-section"><div class="sidebar-title">More</div><a href="roadmap.html" data-nav="roadmap">Roadmap</a><a href="README.md">Source README</a></div></aside>
+    <main class="content">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span>Operations</span></nav>
+      <article class="card doc-page">
+        <h1>Operations</h1>
+        <p class="lede">The platform keeps a single-build queue, validates GitHub webhooks, and prunes stale data on a schedule.</p>
+        <h2>Queue and logs</h2><ul><li>The build queue runs one job at a time and reports queue length plus busy state through <code>/health</code> and <code>/api/queue</code>.</li><li><code>mini-vercel logs</code> reads the running container directly from Docker and tails the last 100 lines, with <code>--follow</code> support.</li></ul>
+        <h2>Webhooks</h2><ul><li>GitHub webhooks are limited to 10 requests per minute.</li><li>When <code>WEBHOOK_SECRET</code> is set, the daemon verifies <code>x-hub-signature-256</code> with HMAC SHA-256.</li><li>Push events on <code>main</code> or <code>master</code> enqueue production deployments.</li><li>Pull request events create, update, or tear down preview deployments.</li></ul>
+        <h2>Maintenance</h2><ul><li>The daemon runs <code>docker system prune -f</code> every hour.</li><li>Expired sessions are removed on the same interval.</li><li>Stopped production deployments older than seven days are deleted.</li></ul>
+        <div class="pager"><a href="caddy-routing.html">Previous: Caddy routing</a><a href="roadmap.html">Next: Roadmap</a></div>
+      </article>
+    </main>
+  </div>
+</body>
+</html>
