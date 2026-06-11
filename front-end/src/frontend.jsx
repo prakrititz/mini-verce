@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ShaderGradientCanvas, ShaderGradient } from "@shadergradient/react";
 
 // ─── Fonts via @import in a style tag injected once ───────────────────────────
@@ -58,12 +59,6 @@ const CSS = `
     pointer-events: none; z-index: 9999;
     mix-blend-mode: screen; transition: transform 0.08s;
   }
-  #orbit-ring {
-    position: fixed; top:0; left:0; width:36px; height:36px;
-    border: 1px solid rgba(146,0,219,0.55); border-radius: 50%;
-    pointer-events: none; z-index: 9998;
-    transition: transform 0.18s ease, width 0.2s, height 0.2s, border-color 0.2s;
-  }
   /* grain */
   #orbit-grain {
     position: fixed; inset:0; pointer-events:none; z-index:3; opacity:0.35;
@@ -85,6 +80,7 @@ const CSS = `
     font-family: var(--font-display); font-size:1.75rem; font-weight:158;
     font-variation-settings:"ELGR" 1.2, "ELSH" 2;
     letter-spacing:0; color: var(--white);
+    text-decoration:none;
   }
   .o-logo em { color: var(--purple); font-style:normal; }
   .o-links { display:flex; gap:2.5rem; list-style:none; min-width:0; }
@@ -146,19 +142,21 @@ const CSS = `
     font-size:0.8rem; font-weight:500; letter-spacing:0.04em;
     clip-path: polygon(10px 0%,100% 0%,calc(100% - 10px) 100%,0% 100%);
     transition: background 0.2s, transform 0.14s; position:relative; overflow:hidden;
+    text-decoration:none; display:inline-flex; align-items:center;
   }
   .o-btn-primary:hover { background:#b020ff; transform:scale(1.03); }
   .o-btn-ghost {
     background:transparent; color:var(--off);
-    border:1px solid var(--purple-border); cursor:none;
+    border:1px solid rgba(186,49,255,0.35); cursor:none;
     padding:0.82rem 2rem; font-family:var(--font-mono);
     font-size:0.8rem; font-weight:400; letter-spacing:0.04em;
     transition: border-color 0.2s, color 0.2s;
+    text-decoration:none; display:inline-flex; align-items:center;
   }
   .o-btn-ghost:hover { border-color:var(--purple); color:var(--white); }
   .o-stats {
     display:flex; flex-wrap:wrap; gap:2.5rem; margin-top:3.5rem; padding-top:2rem;
-    border-top:1px solid var(--purple-border);
+    border-top:1px solid rgba(186,49,255,0.15);
     font-family: var(--font-mono);
     width:min(100%, 760px);
   }
@@ -171,7 +169,7 @@ const CSS = `
   .o-sec-title { font-family:var(--font-display); font-size:3.75rem; font-weight:158; font-variation-settings:"ELGR" 1.2, "ELSH" 2; line-height:0.9; letter-spacing:0; margin-bottom:1.5rem; }
   /* TERMINAL */
   .o-term-wrap {
-    width:min(100%, 860px); border:1px solid var(--purple-border);
+    width:min(100%, 860px); border:1px solid rgba(186,49,255,0.25);
     background:rgba(0,0,10,0.88); backdrop-filter:blur(22px);
     overflow:hidden; position:relative;
   }
@@ -181,14 +179,14 @@ const CSS = `
   }
   .o-term-bar {
     display:flex; align-items:center; gap:0.55rem;
-    padding:0.7rem 1.1rem; border-bottom:1px solid var(--purple-border);
+    padding:0.7rem 1.1rem; border-bottom:1px solid rgba(186,49,255,0.15);
     background:rgba(146,0,219,0.07);
   }
   .dot-r { width:9px;height:9px;border-radius:50%;background:#ff5f57; }
   .dot-y { width:9px;height:9px;border-radius:50%;background:#febc2e; }
   .dot-g { width:9px;height:9px;border-radius:50%;background:#28c840; }
   .o-term-title { font-family:var(--font-mono); font-size:0.67rem; color:var(--muted); margin-left:auto; letter-spacing:0.09em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .o-term-body { padding:1.4rem 1.4rem 1.7rem; font-family:var(--font-mono); font-size:0.79rem; line-height:1.9; min-height:320px; overflow:auto; }
+  .o-term-body { padding:1.4rem 1.4rem 1.7rem; font-family:var(--font-mono); font-size:0.79rem; line-height:1.9; min-height:340px; overflow:auto; }
   .t-cmd { display:flex; gap:0.6rem; min-width:0; }
   .t-prompt { color:var(--purple); user-select:none; }
   .t-c { color:#c8e6ff; min-width:0; overflow-wrap:anywhere; }
@@ -210,10 +208,10 @@ const CSS = `
   /* HOW IT WORKS */
   .o-how-grid {
     display:grid; grid-template-columns:repeat(2, minmax(0, 1fr));
-    border:1px solid var(--purple-border); margin-top:2.5rem;
+    border:1px solid rgba(186,49,255,0.2); margin-top:2.5rem;
   }
   .o-step {
-    padding:2.5rem; border-right:1px solid var(--purple-border); border-bottom:1px solid var(--purple-border);
+    padding:2.5rem; border-right:1px solid rgba(186,49,255,0.15); border-bottom:1px solid rgba(186,49,255,0.15);
     position:relative; transition:background 0.3s;
   }
   .o-step:nth-child(2n) { border-right:none; }
@@ -227,9 +225,10 @@ const CSS = `
   /* DOCS */
   .o-docs-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1.4rem; margin-top:2.5rem; }
   .o-doc {
-    border:1px solid var(--purple-border); padding:1.7rem;
+    border:1px solid rgba(186,49,255,0.2); padding:1.7rem;
     position:relative; overflow:hidden; cursor:none;
     transition:border-color 0.25s, transform 0.25s; background:rgba(0,0,16,0.5);
+    text-decoration:none; display:block; color:inherit;
   }
   .o-doc::before {
     content:''; position:absolute; inset:0;
@@ -246,19 +245,19 @@ const CSS = `
   /* GET STARTED */
   .o-gs-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:4rem; align-items:start; margin-top:2.5rem; }
   .o-gs-list { list-style:none; }
-  .o-gs-item { display:flex; gap:1rem; align-items:flex-start; padding:1.2rem 0; border-bottom:1px solid var(--purple-border); font-family:var(--font-mono); }
+  .o-gs-item { display:flex; gap:1rem; align-items:flex-start; padding:1.2rem 0; border-bottom:1px solid rgba(186,49,255,0.15); font-family:var(--font-mono); }
   .o-gs-item:last-child { border-bottom:none; }
   .o-gs-n { font-family:var(--font-display); font-size:1.05rem; font-weight:158; font-variation-settings:"ELGR" 1.2, "ELSH" 2; color:var(--purple); min-width:22px; padding-top:0.1rem; }
   .o-gs-strong { display:block; color:var(--white); font-weight:500; font-size:0.78rem; margin-bottom:0.3rem; }
   .o-gs-span { color:var(--off); font-size:0.73rem; font-weight:300; line-height:1.7; }
-  .o-install { border:1px solid var(--purple-border); overflow:hidden; background:rgba(0,0,10,0.85); }
+  .o-install { border:1px solid rgba(186,49,255,0.2); overflow:hidden; background:rgba(0,0,10,0.85); }
   .o-install-body { padding:1.4rem; }
   .o-install-cmd { font-family:var(--font-mono); font-size:0.78rem; color:#c8e6ff; line-height:2; overflow-wrap:anywhere; }
-  .o-install-note { margin-top:1.4rem; padding-top:1.4rem; border-top:1px solid var(--purple-border); font-family:var(--font-mono); font-size:0.69rem; color:var(--muted); line-height:1.75; font-weight:300; }
+  .o-install-note { margin-top:1.4rem; padding-top:1.4rem; border-top:1px solid rgba(186,49,255,0.15); font-family:var(--font-mono); font-size:0.69rem; color:var(--muted); line-height:1.75; font-weight:300; }
   .o-install-note strong { color:var(--off); font-weight:500; }
   /* FOOTER */
   .o-footer {
-    border-top:1px solid var(--purple-border); padding:2.5rem var(--page-x);
+    border-top:1px solid rgba(186,49,255,0.15); padding:2.5rem var(--page-x);
     width:100%; max-width:100vw; overflow:hidden;
     display:flex; align-items:center; justify-content:space-between; gap:1.5rem;
     font-family:var(--font-mono); font-size:0.68rem; color:var(--muted); letter-spacing:0.05em;
@@ -267,6 +266,8 @@ const CSS = `
   .o-footer-logo { font-family:var(--font-display); font-weight:158; font-variation-settings:"ELGR" 1.2, "ELSH" 2; font-size:1.45rem; color:var(--white); }
   .o-footer-logo em { color:var(--purple); font-style:normal; }
   .o-footer-links { display:flex; gap:2rem; flex-wrap:wrap; justify-content:flex-end; }
+  .o-footer-links a { color:var(--muted); text-decoration:none; transition:color 0.2s; }
+  .o-footer-links a:hover { color:var(--white); }
   /* Reveal */
   .rev { opacity:0; transform:translateY(24px); transition:opacity 0.7s ease,transform 0.7s ease; }
   .rev.vis { opacity:1; transform:translateY(0); }
@@ -312,7 +313,7 @@ const CSS = `
     .o-timer { width:100%; padding-left:0; padding-right:0; }
     .o-how-grid, .o-docs-grid, .o-gs-grid { grid-template-columns:1fr; }
     .o-step { border-right:none; padding:2rem 1.25rem; }
-    .o-step:nth-last-child(-n+2) { border-bottom:1px solid var(--purple-border); }
+    .o-step:nth-last-child(-n+2) { border-bottom:1px solid rgba(186,49,255,0.15); }
     .o-step:last-child { border-bottom:none; }
     .o-step-n { font-size:3.2rem; right:1rem; }
     .o-doc { padding:1.35rem; min-height:10.5rem; }
@@ -364,25 +365,33 @@ const CSS = `
   }
 `;
 
-// ─── Terminal lines ───────────────────────────────────────────────────────────
+// ─── Terminal lines — real orbit CLI workflow ──────────────────────────────────
 const TERM_LINES = [
-  { t: "cmd", s: "git push origin main" },
-  { t: "info", s: "Enumerating objects: 14, done." },
-  { t: "info", s: "remote: Orbit webhook received ✓" },
-  { t: "warn", s: "[orbit] Cloning commit 3a8f9c2..." },
-  { t: "out", s: "[orbit] Detecting stack... → Node.js 20" },
-  { t: "out", s: "[orbit] Generating Dockerfile automatically..." },
-  { t: "cmd", s: "→ docker build -t my-app:3a8f9c2 ." },
-  { t: "out", s: "Step 1/6: FROM node:20-alpine" },
-  { t: "out", s: "Step 2/6: WORKDIR /app" },
-  { t: "out", s: "Step 3/6: RUN npm ci --production" },
-  { t: "out", s: "Step 4/6: COPY . ." },
-  { t: "out", s: "Step 5/6: CMD [\"node\",\"index.js\"]" },
-  { t: "ok", s: "Successfully built d4e9f1a3 ✓" },
-  { t: "ok", s: "Successfully tagged my-app:3a8f9c2 ✓" },
-  { t: "em", s: "[orbit] Deploying container..." },
-  { t: "ok", s: "✓ my-app running at my-app.local:3000" },
-  { t: "em", s: "⬡ Deploy complete — 23s" },
+  { t: "cmd", s: "orbit start-daemon" },
+  { t: "ok",  s: "✓ Daemon started on port 4000" },
+  { t: "ok",  s: "✓ Caddy reverse proxy container running" },
+  { t: "cmd", s: "orbit signup" },
+  { t: "info",s: "Email: dev@example.com" },
+  { t: "ok",  s: "✓ Account created. Session saved to ~/.orbit-auth.json" },
+  { t: "cmd", s: "orbit github connect" },
+  { t: "info",s: "Paste your GitHub PAT: ****" },
+  { t: "ok",  s: "✓ Connected as @your-github-username" },
+  { t: "cmd", s: "orbit import" },
+  { t: "out", s: "Fetching your GitHub repositories..." },
+  { t: "info",s: "? Select a repository to link: your-github-username/my-app (main)" },
+  { t: "ok",  s: "✓ Project \"my-app\" linked" },
+  { t: "ok",  s: "✓ Webhook registered on GitHub" },
+  { t: "cmd", s: "orbit deploy" },
+  { t: "out", s: "[orbit] Detecting stack... → Vite + React" },
+  { t: "out", s: "[orbit] Generating multi-stage Dockerfile..." },
+  { t: "out", s: "→ docker build -t my-app:a3f92c1 ." },
+  { t: "out", s: "Step 1/8  FROM node:20-alpine AS builder" },
+  { t: "out", s: "Step 5/8  RUN npm ci && npm run build" },
+  { t: "out", s: "Step 8/8  COPY --from=builder /app/dist /usr/share/nginx/html" },
+  { t: "ok",  s: "✓ Successfully built a3f92c1" },
+  { t: "em",  s: "[orbit] Zero-downtime swap — reloading Caddy..." },
+  { t: "ok",  s: "✓ my-app live at http://my-app.localhost:8080" },
+  { t: "em",  s: "⬡ Deploy complete — 23s" },
 ];
 
 // ─── Terminal component ───────────────────────────────────────────────────────
@@ -398,7 +407,6 @@ function Terminal() {
 
     async function run() {
       setLines([]); setTimerVal(0); setDone(false);
-      // timer
       let tv = 0;
       timerInt = setInterval(() => {
         tv += 0.1;
@@ -407,12 +415,14 @@ function Terminal() {
       }, 100);
       for (let i = 0; i < TERM_LINES.length; i++) {
         if (cancelled) return;
-        await new Promise(r => setTimeout(r, i < 3 ? 220 : i < 6 ? 170 : i < 13 ? 110 : 190));
+        // Vary delay: daemon/auth cmds slower, build steps faster
+        const delay = i < 2 ? 350 : i < 8 ? 260 : i < 13 ? 200 : i < 20 ? 100 : 220;
+        await new Promise(r => setTimeout(r, delay));
         setLines(prev => [...prev, TERM_LINES[i]]);
       }
       clearInterval(timerInt);
       if (!cancelled) { setTimerVal(23); setDone(true); }
-      await new Promise(r => setTimeout(r, 5500));
+      await new Promise(r => setTimeout(r, 6000));
       if (!cancelled) run();
     }
     run();
@@ -447,12 +457,11 @@ function Terminal() {
         </div>
         <div>
           <div className="o-timer-lbl">Deploy time</div>
-          <div style={{ fontFamily:"var(--font-mono)", fontSize:"0.65rem", color:"var(--muted)", marginTop:"0.15rem" }}></div>
         </div>
         {done && (
-          <div style={{ marginLeft:"1rem", paddingLeft:"1.4rem", borderLeft:"1px solid var(--purple-border)" }}>
+          <div style={{ marginLeft:"1rem", paddingLeft:"1.4rem", borderLeft:"1px solid rgba(186,49,255,0.2)" }}>
             <div style={{ fontFamily:"var(--font-mono)", fontSize:"0.65rem", color:"#50fa7b", fontWeight:500, letterSpacing:"0.08em", textTransform:"uppercase" }}>✓ Live</div>
-            <div style={{ fontFamily:"var(--font-mono)", fontSize:"0.65rem", color:"var(--muted)", marginTop:"0.15rem" }}>my-app.local:3000</div>
+            <div style={{ fontFamily:"var(--font-mono)", fontSize:"0.65rem", color:"var(--muted)", marginTop:"0.15rem" }}>my-app.localhost:8080</div>
           </div>
         )}
       </div>
@@ -463,9 +472,7 @@ function Terminal() {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function Orbit() {
   const cursorRef = useRef(null);
-  const ringRef = useRef(null);
-  const ringPos = useRef({ x: 0, y: 0 });
-  const mousePos = useRef({ x: 0, y: 0 });
+  const navigate = useNavigate();
 
   // Inject CSS once
   useEffect(() => {
@@ -478,35 +485,14 @@ export default function Orbit() {
   // Custom cursor
   useEffect(() => {
     const onMove = (e) => {
-      mousePos.current = { x: e.clientX, y: e.clientY };
       if (cursorRef.current)
         cursorRef.current.style.transform = `translate(${e.clientX - 5}px,${e.clientY - 5}px)`;
     };
     window.addEventListener("mousemove", onMove);
-    let rafId;
-    const animRing = () => {
-      ringPos.current.x += (mousePos.current.x - ringPos.current.x) * 0.13;
-      ringPos.current.y += (mousePos.current.y - ringPos.current.y) * 0.13;
-      if (ringRef.current)
-        ringRef.current.style.transform = `translate(${ringPos.current.x - 18}px,${ringPos.current.y - 18}px)`;
-      rafId = requestAnimationFrame(animRing);
-    };
-    animRing();
-    return () => { window.removeEventListener("mousemove", onMove); cancelAnimationFrame(rafId); };
+    return () => window.removeEventListener("mousemove", onMove);
   }, []);
 
-  // Hover expand cursor
-  useEffect(() => {
-    const hoverEls = document.querySelectorAll("button, a, .o-doc, .o-step");
-    const expand = () => {
-      if (ringRef.current) { ringRef.current.style.width = "50px"; ringRef.current.style.height = "50px"; ringRef.current.style.borderColor = "rgba(146,0,219,0.9)"; }
-    };
-    const shrink = () => {
-      if (ringRef.current) { ringRef.current.style.width = "36px"; ringRef.current.style.height = "36px"; ringRef.current.style.borderColor = "rgba(146,0,219,0.55)"; }
-    };
-    hoverEls.forEach(el => { el.addEventListener("mouseenter", expand); el.addEventListener("mouseleave", shrink); });
-    return () => hoverEls.forEach(el => { el.removeEventListener("mouseenter", expand); el.removeEventListener("mouseleave", shrink); });
-  });
+
 
   // Scroll reveal
   useEffect(() => {
@@ -523,7 +509,6 @@ export default function Orbit() {
       <FontLoader />
       {/* Custom cursor */}
       <div id="orbit-cursor" ref={cursorRef} />
-      <div id="orbit-ring" ref={ringRef} />
       {/* Grain */}
       <div id="orbit-grain" />
 
@@ -566,33 +551,33 @@ export default function Orbit() {
 
       {/* ── NAV ── */}
       <nav className="o-nav">
-        <div className="o-logo">ORBIT</div>
+        <a href="/" className="o-logo">ORBIT</a>
         <ul className="o-links">
           <li><a href="#how">How it works</a></li>
           <li><a href="#docs">Docs</a></li>
           <li><a href="#start">Get started</a></li>
         </ul>
-        <button className="o-cta">npm install orbit-paas</button>
+        <button className="o-cta" onClick={() => navigate("/docs/quickstart")}>Read the docs →</button>
       </nav>
 
       <main style={{ position: "relative", zIndex: 2 }}>
         {/* ── HERO ── */}
         <section className="o-hero">
-          <div className="o-badge rev"><span className="o-badge-dot" />Self-hosted PaaS · Deploy in 25s</div>
+          <div className="o-badge rev"><span className="o-badge-dot" />Self-hosted PaaS · Deploy in ~25s</div>
           <h1 className="o-h1 rev">
             Your device<br />
             <em className="ac">is the</em><br />
             <em className="dm">server.</em>
           </h1>
           <p className="o-sub rev">
-            Connect GitHub. Push code. Orbit auto-builds a Docker image and deploys it on your own machine — no cloud bills, no config, no nonsense.
+            Connect GitHub. Push code. Orbit auto-detects your stack, builds a Docker image, and deploys it on your own machine — no cloud bills, no config files, no nonsense.
           </p>
           <div className="o-actions rev">
-            <button className="o-btn-primary">Install Orbit →</button>
-            <button className="o-btn-ghost">View on GitHub</button>
+            <a href="#start" className="o-btn-primary">Get started →</a>
+            <a href="/docs/quickstart" className="o-btn-ghost">Read the docs</a>
           </div>
           <div className="o-stats rev">
-            {[["25s","avg deploy time"],["0","config files"],["$0","cloud cost"]].map(([n,l])=>(
+            {[["~25s","avg deploy time"],["0","config files needed"],["$0","cloud cost"]].map(([n,l])=>(
               <div key={l}>
                 <div className="o-stat-num"><em>{n}</em></div>
                 <div className="o-stat-lbl">{l}</div>
@@ -614,10 +599,10 @@ export default function Orbit() {
           <h2 className="o-sec-title rev">How Orbit works.</h2>
           <div className="o-how-grid rev">
             {[
-              ["01","⬡","Install once","A single npm install spins up the Orbit daemon on your machine. It runs silently in the background, listening for GitHub webhooks.","npm install -g orbit-paas && orbit init"],
-              ["02","⑂","Connect GitHub","Orbit registers a webhook on your repo automatically via the GitHub API. Paste a URL — done. No manual dashboard wiring.","orbit connect github.com/you/my-app"],
-              ["03","⬡","Auto Docker build","On every push, Orbit clones the latest commit, generates a Dockerfile if none exists, and runs a containerized build.","→ docker build -t my-app:3a8f9c2 ."],
-              ["04","◎","Deploy on device","The container runs on your machine. Orbit's built-in reverse proxy maps it to a local domain with instant TLS via mkcert.","✓ my-app.local:3000 — live in 25s"],
+              ["01","⬡","Start the daemon","Run orbit start-daemon once. It spawns a background Express control plane on port 4000 and ensures Caddy is running in Docker for reverse proxying.","orbit start-daemon"],
+              ["02","⑂","Connect GitHub","orbit github connect links your PAT (AES-256 encrypted in SQLite). Then orbit import lists your repos and auto-registers a webhook — no manual dashboard wiring.","orbit github connect && orbit import"],
+              ["03","⬡","Auto Docker build","On every push, Orbit detects your stack (Next.js, Vite, CRA, or Node), generates an optimised multi-stage Dockerfile if none exists, and containerises the build.","→ docker build -t my-app:a3f92c1 ."],
+              ["04","◎","Zero-downtime swap","The new container starts on a free port. Orbit rewrites the Caddyfile and calls caddy reload — the old container is only stopped after the new one is healthy.","✓ my-app.localhost:8080 — live in 23s"],
             ].map(([n,ico,title,desc,code])=>(
               <div key={n} className="o-step">
                 <div className="o-step-n">{n}</div>
@@ -636,19 +621,19 @@ export default function Orbit() {
           <h2 className="o-sec-title rev">Everything you need.</h2>
           <div className="o-docs-grid rev">
             {[
-              ["Quickstart","Install & init","Get Orbit running on macOS, Linux, or Windows in under two minutes. Prerequisites, first deploy, and a sanity check."],
-              ["Configuration","orbit.config.js","Optional config for custom ports, build hooks, env injection, rollback thresholds, and multi-project routing."],
-              ["GitHub","Webhook setup","How Orbit registers, validates, and processes GitHub push events. Branch filters, deploy previews, and PR environments."],
-              ["Docker","Auto-Dockerfile","Orbit detects your stack (Node, Python, Go, Rust, static) and generates an optimized multi-stage Dockerfile automatically."],
-              ["Networking","Reverse proxy & TLS","Built-in Caddy-powered proxy maps containers to local domains. HTTPS works out of the box. Expose publicly via Cloudflare Tunnel."],
-              ["CLI","All commands","Full reference for orbit init, connect, deploy, rollback, logs, ps, and the interactive orbit dashboard TUI."],
-            ].map(([tag,title,desc])=>(
-              <div key={title} className="o-doc">
+              ["Quickstart","/docs/quickstart","Getting started","Install Orbit, start the daemon, create an account, and deploy your first project. Node.js ≥ 18 and Docker required."],
+              ["CLI Reference","/docs/commands","All commands","Full reference for all 15+ orbit commands — start-daemon, signup, github connect, import, deploy, rollback, logs, env, domain, and more."],
+              ["GitHub","/docs/github","Webhooks & import","How orbit github connect, orbit import, and automatic webhook registration work. PAT scopes, AES-256 encryption, push triggers."],
+              ["Docker","/docs/docker","Auto-Dockerfile","Stack auto-detection for Next.js, Vite, CRA, and generic Node. Multi-stage builds, minivercel.json overrides, and image tagging by commit SHA."],
+              ["Networking","/docs/networking","Caddy & TLS","How Orbit's built-in Caddy reverse proxy maps containers to *.localhost. Local CA trust, HTTPS, custom domains, and port management."],
+              ["Env Vars","/docs/envvars","Secrets management","Store, update, and pull environment variables per project with orbit env. Variables are kept in SQLite and injected at deploy time."],
+            ].map(([tag,href,title,desc])=>(
+              <a key={title} href={href} className="o-doc">
                 <div className="o-doc-tag">{tag}</div>
                 <div className="o-doc-title">{title}</div>
                 <div className="o-doc-desc">{desc}</div>
                 <div className="o-doc-arr">↗</div>
-              </div>
+              </a>
             ))}
           </div>
         </section>
@@ -660,10 +645,10 @@ export default function Orbit() {
           <div className="o-gs-grid rev">
             <ul className="o-gs-list">
               {[
-                ["01","Install the Orbit CLI","Requires Node.js ≥ 18 and Docker Desktop (or Docker Engine on Linux). One global npm install, that's it."],
-                ["02","Run orbit init","Starts the Orbit daemon, creates a local CA, and sets up the reverse proxy. Runs once, stays running."],
-                ["03","Connect a GitHub repo","Paste a GitHub repo URL. Orbit registers the webhook automatically — needs a GitHub token with repo scope."],
-                ["04","Push and watch","Every git push triggers an instant build and deploy. Open the dashboard at orbit.local to monitor everything."],
+                ["01","Install & build","Clone the repo, npm install, npm run build, npm link — that's it. The orbit binary is now globally available."],
+                ["02","Start the daemon","orbit start-daemon launches the background Express server and Caddy proxy. Run it once; it stays running."],
+                ["03","Create account & connect GitHub","orbit signup creates your local account. orbit github connect links your PAT so Orbit can register webhooks automatically."],
+                ["04","Import, deploy, ship","orbit import picks your repo and registers the webhook. orbit deploy triggers the first build. orbit list shows your live URL."],
               ].map(([n,strong,span])=>(
                 <li key={n} className="o-gs-item">
                   <div className="o-gs-n">{n}</div>
@@ -678,20 +663,23 @@ export default function Orbit() {
               </div>
               <div className="o-install-body">
                 <div className="o-install-cmd">
-                  <span style={{color:"var(--purple)"}}>$</span> <span>npm install -g orbit-paas</span><br/>
-                  <span style={{color:"var(--muted)"}}># ✓ installed orbit@1.0.0</span><br/><br/>
-                  <span style={{color:"var(--purple)"}}>$</span> <span>orbit init</span><br/>
-                  <span style={{color:"#50fa7b"}}># ✓ daemon started</span><br/>
-                  <span style={{color:"#50fa7b"}}># ✓ local CA registered</span><br/>
-                  <span style={{color:"#50fa7b"}}># ✓ proxy ready on :80/:443</span><br/><br/>
-                  <span style={{color:"var(--purple)"}}>$</span> <span>orbit connect github.com/you/app</span><br/>
-                  <span style={{color:"#8be9fd"}}># › enter GitHub token: ****</span><br/>
-                  <span style={{color:"#50fa7b"}}># ✓ webhook registered</span><br/>
-                  <span style={{color:"#50fa7b"}}># ✓ watching main branch</span><br/><br/>
-                  <span style={{color:"var(--muted)"}}># → push to trigger first deploy</span>
+                  <span style={{color:"var(--purple)"}}>$</span> <span>git clone https://github.com/you/orbit && cd orbit</span><br/>
+                  <span style={{color:"var(--purple)"}}>$</span> <span>npm install && npm run build && npm link</span><br/>
+                  <span style={{color:"var(--muted)"}}>  # ✓ orbit binary linked globally</span><br/><br/>
+                  <span style={{color:"var(--purple)"}}>$</span> <span>orbit start-daemon</span><br/>
+                  <span style={{color:"#50fa7b"}}>  # ✓ daemon started on :4000</span><br/>
+                  <span style={{color:"#50fa7b"}}>  # ✓ Caddy proxy running</span><br/><br/>
+                  <span style={{color:"var(--purple)"}}>$</span> <span>orbit signup</span><br/>
+                  <span style={{color:"#8be9fd"}}>  Email: dev@example.com</span><br/>
+                  <span style={{color:"#50fa7b"}}>  # ✓ account created</span><br/><br/>
+                  <span style={{color:"var(--purple)"}}>$</span> <span>orbit github connect</span><br/>
+                  <span style={{color:"#8be9fd"}}>  # › Paste your GitHub PAT: ****</span><br/>
+                  <span style={{color:"#50fa7b"}}>  # ✓ connected as @you</span><br/><br/>
+                  <span style={{color:"var(--purple)"}}>$</span> <span>orbit import && orbit deploy</span><br/>
+                  <span style={{color:"#50fa7b"}}>  # ✓ my-app live at my-app.localhost:8080</span>
                 </div>
                 <div className="o-install-note">
-                  <strong>Requirements:</strong> Node.js ≥ 18 · Docker · macOS / Linux / WSL2<br/>
+                  <strong>Requirements:</strong> Node.js ≥ 18 · Docker Desktop (or Docker Engine)<br/>
                   Orbit never phones home. All builds run locally. Your code never leaves your machine.
                 </div>
               </div>
@@ -705,7 +693,9 @@ export default function Orbit() {
         <div className="o-footer-logo">ORBIT</div>
         <div>Your device. Your server. Your rules.</div>
         <div className="o-footer-links">
-          <span>GitHub</span><span>Docs</span><span>Changelog</span>
+          <a href="/docs/quickstart">Docs</a>
+          <a href="/docs/commands">CLI Reference</a>
+          <a href="/docs/github">GitHub</a>
         </div>
       </footer>
     </>

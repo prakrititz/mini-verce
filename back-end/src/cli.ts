@@ -12,7 +12,7 @@ import { initDB, get, all, run } from './db';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const AUTH_PATH = path.join(os.homedir(), '.mini-vercel-auth.json');
+const AUTH_PATH = path.join(os.homedir(), '.orbit-auth.json');
 const DAEMON_URL = `http://localhost:${process.env.DAEMON_PORT || 4000}`;
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ function readAuth(): AuthSession | null {
 function requireAuth(): AuthSession {
   const auth = readAuth();
   if (!auth) {
-    console.error('Not logged in. Run "mini-vercel login" first.');
+    console.error('Not logged in. Run "orbit login" first.');
     process.exit(1);
   }
   return auth;
@@ -111,7 +111,7 @@ function prompt(question: string, silent = false): Promise<string> {
 
 const program = new Command();
 program
-  .name('mini-vercel')
+  .name('orbit')
   .description('A self-hosted PaaS CLI')
   .version('2.0.0');
 
@@ -147,7 +147,7 @@ caddyCmd
       const res = await f(`${DAEMON_URL}/api/caddy/trust`, { method: 'POST' });
       data = await res.json();
     } catch {
-      console.error('Could not reach the daemon. Is it running? Run "mini-vercel start-daemon".');
+      console.error('Could not reach the daemon. Is it running? Run "orbit start-daemon".');
       process.exit(1);
     }
     if (data.error) { console.error(`Error: ${data.error}`); process.exit(1); }
@@ -165,7 +165,7 @@ caddyCmd
       const res = await f(`${DAEMON_URL}/api/caddy/mode`);
       data = await res.json();
     } catch {
-      console.error('Could not reach the daemon. Is it running? Run "mini-vercel start-daemon".');
+      console.error('Could not reach the daemon. Is it running? Run "orbit start-daemon".');
       process.exit(1);
     }
     console.log(`Mode:        ${data.mode}`);
@@ -174,7 +174,7 @@ caddyCmd
     console.log(`HTTPS port:  ${data.httpsPort}`);
     console.log('');
     if (data.mode === 'local') {
-      console.log('Tip: run "mini-vercel caddy trust" once to install the local CA.');
+      console.log('Tip: run "orbit caddy trust" once to install the local CA.');
       console.log('     Then visit https://<project>.localhost in your browser.');
     } else {
       console.log('Tip: set CADDY_MODE=local in your .env for local development.');
@@ -268,7 +268,7 @@ githubCmd
 
     const data = await daemonPost('/auth/github/connect', sessionToken, { pat: pat.trim() });
     console.log(`\n✓ ${data.message}`);
-    console.log('You can now run "mini-vercel import" to link repos interactively.');
+    console.log('You can now run "orbit import" to link repos interactively.');
   });
 
 githubCmd
@@ -280,7 +280,7 @@ githubCmd
     if (data.connected) {
       console.log(`GitHub connected: @${data.githubUsername}`);
     } else {
-      console.log('GitHub not connected. Run "mini-vercel github connect".');
+      console.log('GitHub not connected. Run "orbit github connect".');
     }
   });
 
@@ -346,14 +346,14 @@ githubCmd
         const status = await statusRes.json() as any;
         if (status.connected) {
           console.log(`\n✓ Connected as @${status.githubUsername}`);
-          console.log('You can now run "mini-vercel import" to link repos interactively.');
+          console.log('You can now run "orbit import" to link repos interactively.');
           return;
         }
       } catch { /* daemon may briefly restart */ }
     }
 
     console.error('\nTimeout: GitHub authorization was not completed within 5 minutes.');
-    console.error('Run "mini-vercel github oauth" to try again.');
+    console.error('Run "orbit github oauth" to try again.');
     process.exit(1);
   });
 
@@ -413,7 +413,7 @@ program
     console.log(`\n✓ Project "${data.name}" linked.`);
     console.log(`  Repo:    https://github.com/${data.repoFullName}`);
     console.log(`  Webhook: ${data.webhookStatus}`);
-    console.log(`\nRun "mini-vercel deploy" to trigger your first deployment.`);
+    console.log(`\nRun "orbit deploy" to trigger your first deployment.`);
   });
 
 // ── link ──────────────────────────────────────────────────────────────────────
@@ -452,7 +452,7 @@ program
     const data = await daemonPost(`/api/projects/${project.id}/deploy`, sessionToken, {});
 
     console.log(`Deployment enqueued (buildId: ${data.buildId})`);
-    console.log(`Watch logs: mini-vercel logs`);
+    console.log(`Watch logs: orbit logs`);
   });
 
 // ── list ──────────────────────────────────────────────────────────────────────
@@ -464,7 +464,7 @@ program
     const { sessionToken } = requireAuth();
     const { projects } = await daemonGet('/api/projects', sessionToken);
 
-    if (!projects.length) { console.log('No projects yet. Run "mini-vercel link".'); return; }
+    if (!projects.length) { console.log('No projects yet. Run "orbit link".'); return; }
 
     console.log('\nYour Projects:');
     console.table(projects.map((p: any) => ({
@@ -532,7 +532,7 @@ program
       project = res.project;
     }
 
-    if (!project) { console.error('Project not found.'); process.exit(1); }
+  if (!project) { console.error('Project not found.'); process.exit(1); }
 
     const dep = await get(
       'SELECT container_id FROM deployments WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
@@ -583,4 +583,93 @@ program
     console.log(`Restored deployment from: ${data.deployedAt}`);
   });
 
-program.parse(process.argv);
+// ── status ─────────────────────────────────────────────────────────────────────
+
+program
+  .command('status [project-name]')
+  .description('Show live status of a deployed project')
+  .action(async (projectName) => {
+    const { sessionToken, userId } = requireAuth();
+    let project: any;
+    if (projectName) {
+      project = await (await import('./db')).get('SELECT * FROM projects WHERE name = ? AND owner_id = ?', [projectName, userId]);
+      if (!project) { console.error(`Project "${projectName}" not found.`); process.exit(1); }
+    } else {
+      const res = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+      project = res.project;
+    }
+    const data = await daemonGet(`/api/projects/${project.id}/status`, sessionToken);
+    const c = data.container;
+    console.log(`\nProject:    ${data.project}`);
+    console.log(`Status:     ${data.status}`);
+    if (data.url)        console.log(`URL:        ${data.url}`);
+    if (data.port)       console.log(`Port:       ${data.port}`);
+    if (data.deployedAt) console.log(`Deployed:   ${data.deployedAt}`);
+    if (c) {
+      console.log(`Container:  ${c.id}  (${c.status})`);
+      console.log(`Image:      ${c.image}`);
+      console.log(`Started:    ${c.startedAt}`);
+    }
+    console.log('');
+  });
+
+// ── stop ──────────────────────────────────────────────────────────────────────
+
+program
+  .command('stop [project-name]')
+  .description('Stop the running container for a project')
+  .action(async (projectName) => {
+    const { sessionToken, userId } = requireAuth();
+    let project: any;
+    if (projectName) {
+      project = await (await import('./db')).get('SELECT * FROM projects WHERE name = ? AND owner_id = ?', [projectName, userId]);
+      if (!project) { console.error(`Project "${projectName}" not found.`); process.exit(1); }
+    } else {
+      const res = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+      project = res.project;
+    }
+    const data = await daemonPost(`/api/projects/${project.id}/stop`, sessionToken, {});
+    console.log(`✓ ${data.message}`);
+  });
+
+// ── restart ───────────────────────────────────────────────────────────────────
+
+program
+  .command('restart [project-name]')
+  .description('Restart the running container for a project')
+  .action(async (projectName) => {
+    const { sessionToken, userId } = requireAuth();
+    let project: any;
+    if (projectName) {
+      project = await (await import('./db')).get('SELECT * FROM projects WHERE name = ? AND owner_id = ?', [projectName, userId]);
+      if (!project) { console.error(`Project "${projectName}" not found.`); process.exit(1); }
+    } else {
+      const res = await daemonGet(`/api/projects/by-path?path=${encodeURIComponent(process.cwd())}`, sessionToken);
+      project = res.project;
+    }
+    const data = await daemonPost(`/api/projects/${project.id}/restart`, sessionToken, {});
+    console.log(`✓ ${data.message}`);
+    if (data.containerId) console.log(`  Container: ${data.containerId}`);
+  });
+
+// ── ps ────────────────────────────────────────────────────────────────────────
+
+program
+  .command('ps')
+  .description('List all running containers across your projects')
+  .action(async () => {
+    const { sessionToken } = requireAuth();
+    const { ps } = await daemonGet('/api/ps', sessionToken);
+    if (!ps.length) { console.log('No running containers.'); return; }
+    console.log('\nRunning containers:');
+    console.table(ps.map((p: any) => ({
+      Project:   p.project,
+      Container: p.containerId,
+      Port:      p.port,
+      State:     p.containerStatus,
+      Env:       p.env,
+      URL:       p.url,
+    })));
+  });
+
+program.parse(process.argv);

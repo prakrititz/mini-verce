@@ -14,7 +14,7 @@ import rateLimit from 'express-rate-limit';
 import { initDB, all, get, run } from './db';
 import { buildQueue } from './queue';
 import { deployProject } from './deployer';
-import { stopContainer } from './docker';
+import { stopContainer, restartContainer, inspectContainer, streamContainerLogs } from './docker';
 import { generateAndReload, getCaddyMode, trustLocalCA } from './caddy';
 
 const execAsync = util.promisify(exec);
@@ -887,6 +887,211 @@ app.post('/webhooks/github', webhookLimiter, verifyGitHubSignature, async (req: 
   } else {
     res.json({ message: `Event "${event}" ignored.` });
   }
+});
+
+// ── Phase 6: Dashboard static file ───────────────────────────────────────────
+
+const DASHBOARD_PATH = path.join(__dirname, '..', 'dashboard.html');
+
+app.get('/dashboard', (_req, res) => {
+  if (fs.existsSync(DASHBOARD_PATH)) {
+    res.sendFile(DASHBOARD_PATH);
+  } else {
+    res.status(404).send('Dashboard HTML not found. Run npm run build in the back-end directory.');
+  }
+});
+
+// ── Phase 6: Project status ────────────────────────────────────────────────────
+
+/**
+ * GET /api/projects/:id/status
+ * Returns live container inspect info merged with DB deployment data.
+ */
+app.get('/api/projects/:id/status', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+
+  const dep = await get(
+    'SELECT * FROM deployments WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
+    [project.id, 'running']
+  );
+
+  if (!dep) return res.json({ project: project.name, status: 'not_deployed', container: null });
+
+  const containerInfo = dep.container_id ? await inspectContainer(dep.container_id) : null;
+
+  res.json({
+    project: project.name,
+    status: dep.status,
+    port: dep.port,
+    url: dep.port ? `http://${project.name}.localhost:8080` : null,
+    deployedAt: dep.created_at,
+    container: containerInfo,
+  });
+});
+
+// ── Phase 6: Deployment history ────────────────────────────────────────────────
+
+/**
+ * GET /api/projects/:id/deployments
+ * Returns last 15 deployments for a project.
+ */
+app.get('/api/projects/:id/deployments', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+
+  const deployments = await all(
+    'SELECT id, status, port, env, url, container_id, created_at FROM deployments WHERE project_id = ? ORDER BY created_at DESC LIMIT 15',
+    [project.id]
+  );
+  res.json({ deployments });
+});
+
+// ── Phase 6+7: Stop container ─────────────────────────────────────────────────
+
+/**
+ * POST /api/projects/:id/stop
+ * Gracefully stops the running container and marks deployment as stopped.
+ */
+app.post('/api/projects/:id/stop', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+
+  const dep = await get(
+    'SELECT * FROM deployments WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
+    [project.id, 'running']
+  );
+
+  if (!dep) return res.status(400).json({ error: 'No running deployment found.' });
+
+  try {
+    if (dep.container_id) await stopContainer(dep.container_id, false);
+    await run('UPDATE deployments SET status = ? WHERE id = ?', ['stopped', dep.id]);
+    await generateAndReload();
+    console.log(`[Phase7] Stopped project "${project.name}"`);
+    res.json({ message: `Project "${project.name}" stopped.` });
+  } catch (err: any) {
+    res.status(500).json({ error: `Stop failed: ${err.message}` });
+  }
+});
+
+// ── Phase 7: Restart container ────────────────────────────────────────────────
+
+/**
+ * POST /api/projects/:id/restart
+ * Restarts the running container in-place (same image, same port).
+ */
+app.post('/api/projects/:id/restart', verifySessionToken, async (req: Request, res: Response) => {
+  const project = await requireProjectOwner(req, res, req.params.id as string);
+  if (!project) return;
+
+  const dep = await get(
+    'SELECT * FROM deployments WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
+    [project.id, 'running']
+  );
+
+  if (!dep || !dep.container_id) return res.status(400).json({ error: 'No running container to restart.' });
+
+  try {
+    await restartContainer(dep.container_id);
+    console.log(`[Phase7] Restarted project "${project.name}" (container: ${dep.container_id.slice(0,12)})`);
+    res.json({ message: `Project "${project.name}" restarted.`, containerId: dep.container_id.slice(0, 12) });
+  } catch (err: any) {
+    res.status(500).json({ error: `Restart failed: ${err.message}` });
+  }
+});
+
+// ── Phase 7: ps — all running containers ─────────────────────────────────────
+
+/**
+ * GET /api/ps
+ * Lists all running deployments for the authenticated user's projects.
+ */
+app.get('/api/ps', verifySessionToken, async (req: Request, res: Response) => {
+  const userId = (req as any).userId;
+  const rows = await all(`
+    SELECT p.name AS project, d.container_id, d.port, d.env, d.created_at
+    FROM deployments d
+    JOIN projects p ON d.project_id = p.id
+    WHERE p.owner_id = ? AND d.status = 'running'
+    ORDER BY d.created_at DESC
+  `, [userId]);
+
+  // Enrich with live container inspect
+  const ps = await Promise.all(rows.map(async (row: any) => {
+    const info = row.container_id ? await inspectContainer(row.container_id).catch(() => null) : null;
+    return {
+      project: row.project,
+      containerId: row.container_id ? row.container_id.slice(0, 12) : null,
+      port: row.port,
+      env: row.env,
+      containerStatus: info?.status ?? 'unknown',
+      startedAt: info?.startedAt ?? row.created_at,
+      url: `http://${row.project}.localhost:8080`,
+    };
+  }));
+
+  res.json({ ps });
+});
+
+// ── Phase 6: SSE live log stream ──────────────────────────────────────────────
+
+/**
+ * GET /api/projects/:id/logs/stream?token=<sessionToken>
+ * Streams container logs via Server-Sent Events.
+ * Token must be passed as a query param because EventSource doesn't support headers.
+ */
+app.get('/api/projects/:id/logs/stream', async (req: Request, res: Response) => {
+  // Validate token from query string
+  const token = req.query.token as string;
+  if (!token) return res.status(401).json({ error: 'token query param required' });
+
+  const session = await get(
+    `SELECT user_id FROM sessions WHERE token = ? AND expires_at > datetime('now')`,
+    [token]
+  );
+  if (!session) return res.status(401).json({ error: 'Invalid or expired token' });
+
+  const project = await get('SELECT * FROM projects WHERE id = ? AND owner_id = ?', [req.params.id, session.user_id]);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const dep = await get(
+    'SELECT * FROM deployments WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1',
+    [req.params.id, 'running']
+  );
+  if (!dep?.container_id) return res.status(400).json({ error: 'No running container for this project.' });
+
+  // SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+
+  const send = (text: string) => {
+    const lines = text.split('\n').filter(l => l.length > 0);
+    for (const line of lines) {
+      res.write(`data: ${JSON.stringify(line)}\n\n`);
+    }
+  };
+
+  send('[orbit] Connecting to container logs...');
+
+  try {
+    streamContainerLogs(
+      dep.container_id,
+      (chunk) => send(chunk),
+      () => { res.write('event: end\ndata: {}\n\n'); res.end(); },
+      (err) => { send(`[orbit error] ${err.message}`); res.end(); }
+    );
+  } catch (err: any) {
+    send(`[orbit error] ${err.message}`);
+    res.end();
+  }
+
+  req.on('close', () => { /* client disconnected — stream GC handled by Node */ });
 });
 
 // ── Maintenance cron ──────────────────────────────────────────────────────────

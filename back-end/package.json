@@ -1,10 +1,10 @@
 {
-  "name": "terms-cli",
+  "name": "orbit",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "bin": {
-    "mini-vercel": "./dist/cli.js"
+    "orbit": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",

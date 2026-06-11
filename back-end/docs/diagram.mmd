@@ -1,0 +1,142 @@
+classDiagram
+    %% Interfaces / Types
+    class MinivercelConfig <<interface>> {
+      +buildCommand?: string
+      +installCommand?: string
+      +outputDirectory?: string
+    }
+    class DetectedFramework <<interface>> {
+      +framework: string
+      +config: MinivercelConfig
+    }
+    class DeployOptions <<interface>> {
+      +project: Object
+      +sourcePath: string
+      +env?: string
+      +customUrl?: string|null
+    }
+    class DeployResult <<interface>> {
+      +deploymentId: string
+      +containerId: string
+      +port: number
+      +url: string
+    }
+
+    class GitHubUser <<interface>> {
+      +login: string
+      +name: string|null
+    }
+
+    %% Modules as classes with functions
+    class Frameworks {
+      +detectFramework(projectPath: string): DetectedFramework
+      +ensureDockerAssets(projectPath: string): void
+    }
+
+    class Caddy {
+      +getCaddyMode(): 'local'|'public'
+      +startCaddy(): Promise<void>
+      +trustLocalCA(): Promise<string>
+      +generateCaddyfile(): Promise<void>
+      -siteBlock(hostname:string, port:number, tlsLine:string): string
+      +reloadCaddy(): Promise<void>
+      +generateAndReload(): Promise<void>
+    }
+
+    class DockerModule {
+      +buildImage(projectPath:string, imageName:string, buildargs?): Promise<void>
+      +startContainer(imageName:string, port:number, containerName:string, env?:string[], exposedPort?:number): Promise<string>
+      +stopContainer(containerId:string, remove?:boolean): Promise<void>
+      +printContainerLogs(containerId:string, follow?:boolean): Promise<void>
+    }
+
+    class Deployer {
+      +deployProject(options: DeployOptions): Promise<DeployResult>
+    }
+
+    class DB {
+      +run(sql:string, params?:any[]): Promise<void>
+      +get(sql:string, params?:any[]): Promise<any>
+      +all(sql:string, params?:any[]): Promise<any[]>
+      +initDB(): Promise<void>
+    }
+
+    class Queue {
+      +enqueue(job: () => Promise<any>): Promise<any>
+      -processNext(): Promise<void>
+      +getLength(): number
+      +isBusy(): boolean
+    }
+    class BuildQueueInstance {
+      +buildQueue : Queue
+    }
+
+    class CLI {
+      +readAuth(): AuthSession|null
+      +requireAuth(): AuthSession
+      +daemonRequest(method, endpoint, token, body?): Promise<any>
+      +daemonGet/Post/Put/Patch/Delete(...)
+      +prompt(question:string, silent?:boolean): Promise<string>
+      +startDaemon(): void
+      +signup(): void
+      +login(): void
+      +logout(): void
+      +whoami(): void
+      +githubConnect(): void
+      +githubStatus(): void
+      +githubDisconnect(): void
+      +githubOAuth(): void
+      +importRepo(): void
+      +link(): void
+      +deploy(): void
+      +list(): void
+      +envAdd(key,value): void
+      +envRm(key): void
+      +envPull(): void
+      +logs(projectName?, options?): void
+      +domainAdd(domain): void
+      +domainRm(): void
+      +rollback(): void
+    }
+
+    class Daemon {
+      +start(): Promise<void>
+      +verifySessionToken(req,res,next): Promise<void>
+      +requireProjectOwner(req,res,projectId): Promise<any|null>
+      +deriveEncryptionKey(): Buffer
+      +encryptPAT(pat:string): string
+      +decryptPAT(stored:string): string
+      +validateGitHubPAT(pat:string): Promise<GitHubUser>
+      +listGitHubRepos(pat:string): Promise<any[]>
+      +registerGitHubWebhook(pat,owner,repo,webhookUrl,secret): Promise<void>
+      +oauthPage(heading, body, success): string
+      +verifyGitHubSignature(req,res,next): void
+      +pruneOAuthState(): void
+      +webhookHandler(): void
+      +maintenanceTask(): void
+      +route handlers (auth/projects/webhooks/...)
+    }
+
+    %% Relationships / usage
+    Frameworks ..> MinivercelConfig : uses
+    Frameworks ..> DetectedFramework : returns
+
+    Deployer --> DockerModule : uses buildImage/startContainer/stopContainer
+    Deployer --> DB : uses run/all
+    Deployer --> Frameworks : calls ensureDockerAssets / detectFramework
+    Deployer --> Caddy : calls generateAndReload
+
+    Daemon --> Deployer : calls deployProject
+    Daemon --> Queue : enqueues jobs (buildQueue)
+    Daemon --> DB : uses run/get/all/initDB
+    Daemon --> DockerModule : stops containers, interacts with docker
+    Daemon --> Caddy : generate/reload/trust
+    Daemon --> Frameworks : detectFramework / ensureDockerAssets
+
+    CLI --> Daemon : HTTP daemonRequest/daemonGet/etc.
+    CLI --> Caddy : calls startCaddy()
+    CLI --> DockerModule : printContainerLogs()
+    CLI --> DB : initDB/get/all/run (for local logs command)
+
+    Caddy --> DockerModule : manages caddy Docker container (start/exec)
+    Queue <.. BuildQueueInstance : singleton instance `buildQueue`

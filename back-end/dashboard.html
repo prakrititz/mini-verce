@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Orbit Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Handjet:wght,ELGR,ELSH@158,1.2,2&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --p:#e76fff;--p2:#9200db;--p-dim:rgba(186,49,255,.18);--p-border:rgba(186,49,255,.22);
+  --green:#50fa7b;--red:#ff5f57;--yellow:#ffb86c;--blue:#8be9fd;
+  --bg:#000010;--bg2:rgba(0,0,14,.82);--bg3:rgba(8,0,22,.65);
+  --white:#f0eaf8;--off:#b8a8d0;--muted:#beff7e;
+  --mono:'JetBrains Mono',monospace;--display:'Handjet',sans-serif;
+  --sidebar:220px;
+}
+html,body{height:100%;background:var(--bg);color:var(--white);font-family:var(--mono);overflow:hidden}
+
+/* ── Login ── */
+#login-screen{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:var(--bg);z-index:1000;
+}
+.login-card{
+  width:360px;padding:2.5rem;
+  border:1px solid var(--p-border);background:var(--bg2);
+  backdrop-filter:blur(20px);
+}
+.login-logo{
+  font-family:var(--display);font-size:2.4rem;font-weight:158;
+  font-variation-settings:"ELGR" 1.2,"ELSH" 2;color:var(--white);
+  text-align:center;margin-bottom:.3rem;letter-spacing:0;
+}
+.login-logo em{color:var(--p);font-style:normal}
+.login-sub{font-size:.68rem;color:var(--off);text-align:center;letter-spacing:.1em;text-transform:uppercase;margin-bottom:2rem}
+.lf-label{font-size:.65rem;letter-spacing:.1em;text-transform:uppercase;color:var(--p);margin-bottom:.35rem;display:block}
+.lf-input{
+  width:100%;padding:.6rem .85rem;margin-bottom:1.1rem;
+  background:rgba(0,0,0,.5);border:1px solid var(--p-border);color:var(--white);
+  font-family:var(--mono);font-size:.8rem;outline:none;
+  transition:border-color .2s;
+}
+.lf-input:focus{border-color:var(--p)}
+.lf-btn{
+  width:100%;padding:.72rem;background:var(--p);color:#fff;border:none;cursor:pointer;
+  font-family:var(--mono);font-size:.78rem;font-weight:500;letter-spacing:.05em;
+  clip-path:polygon(8px 0%,100% 0%,calc(100% - 8px) 100%,0% 100%);
+  transition:background .2s;
+}
+.lf-btn:hover{background:var(--p2)}
+.lf-err{font-size:.72rem;color:var(--red);margin-top:.6rem;min-height:1rem}
+
+/* ── App shell ── */
+#app{display:none;height:100vh;flex-direction:column}
+#app.visible{display:flex}
+
+/* Top bar */
+.topbar{
+  display:flex;align-items:center;gap:1rem;
+  padding:.75rem 1.2rem;height:50px;flex-shrink:0;
+  background:rgba(0,0,16,.9);border-bottom:1px solid var(--p-border);
+}
+.topbar-logo{
+  font-family:var(--display);font-size:1.55rem;font-weight:158;
+  font-variation-settings:"ELGR" 1.2,"ELSH" 2;letter-spacing:0;color:var(--white);
+}
+.topbar-logo em{color:var(--p);font-style:normal}
+.topbar-sep{color:rgba(255,255,255,.18);font-size:1.1rem}
+.topbar-lbl{font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:var(--off)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:1.2rem}
+.queue-badge{
+  display:flex;align-items:center;gap:.4rem;font-size:.65rem;
+  color:var(--muted);padding:.25rem .6rem;border:1px solid rgba(190,255,126,.25);
+}
+.queue-badge.busy{color:var(--yellow);border-color:rgba(255,184,108,.35)}
+.tb-btn{
+  font-family:var(--mono);font-size:.65rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--off);background:none;border:none;cursor:pointer;transition:color .2s;
+}
+.tb-btn:hover{color:var(--white)}
+
+/* Body */
+.body{display:flex;flex:1;overflow:hidden}
+
+/* Sidebar */
+.sidebar{
+  width:var(--sidebar);flex-shrink:0;border-right:1px solid var(--p-border);
+  display:flex;flex-direction:column;overflow:hidden;background:var(--bg3);
+}
+.sidebar-head{
+  padding:.8rem 1rem .5rem;font-size:.57rem;letter-spacing:.18em;
+  text-transform:uppercase;color:rgba(186,49,255,.45);flex-shrink:0;
+}
+.sidebar-list{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(186,49,255,.2) transparent}
+.sb-item{
+  display:flex;align-items:center;gap:.6rem;
+  padding:.55rem 1rem;cursor:pointer;border-left:2px solid transparent;
+  transition:background .15s,border-color .15s;font-size:.75rem;color:var(--off);
+}
+.sb-item:hover{background:rgba(186,49,255,.07);color:var(--white)}
+.sb-item.active{border-left-color:var(--p);background:rgba(186,49,255,.11);color:var(--white)}
+.sb-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--off)}
+.sb-dot.running{background:var(--green);box-shadow:0 0 6px var(--green)}
+.sb-dot.stopped{background:var(--red)}
+.sb-dot.building{background:var(--yellow);animation:pulse 1.2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.sb-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-env{font-size:.58rem;color:rgba(186,49,255,.55);text-transform:uppercase;letter-spacing:.06em}
+.sb-add{
+  margin:1rem;padding:.5rem;font-size:.65rem;font-family:var(--mono);
+  letter-spacing:.08em;text-transform:uppercase;color:var(--p);
+  background:none;border:1px solid var(--p-border);cursor:pointer;
+  transition:background .2s;
+}
+.sb-add:hover{background:rgba(186,49,255,.1)}
+
+/* Main panel */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* Project header */
+.proj-head{
+  padding:1.2rem 1.6rem .9rem;border-bottom:1px solid var(--p-border);
+  background:rgba(0,0,14,.6);flex-shrink:0;
+}
+.proj-name{
+  font-family:var(--display);font-size:2.1rem;font-weight:158;
+  font-variation-settings:"ELGR" 1.2,"ELSH" 2;color:var(--white);
+  line-height:.9;margin-bottom:.5rem;letter-spacing:0;
+}
+.proj-meta{display:flex;align-items:center;gap:1.4rem;flex-wrap:wrap}
+.proj-url{font-size:.73rem;color:var(--p);text-decoration:none;letter-spacing:.02em}
+.proj-url:hover{text-decoration:underline}
+.proj-repo{font-size:.7rem;color:var(--off)}
+.status-pill{
+  display:inline-flex;align-items:center;gap:.35rem;
+  padding:.18rem .6rem;font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;
+}
+.status-pill.running{background:rgba(80,250,123,.1);color:var(--green);border:1px solid rgba(80,250,123,.3)}
+.status-pill.stopped{background:rgba(255,95,87,.08);color:var(--red);border:1px solid rgba(255,95,87,.25)}
+.status-pill.building{background:rgba(255,184,108,.08);color:var(--yellow);border:1px solid rgba(255,184,108,.3)}
+.status-pill.not_deployed{background:rgba(184,168,208,.06);color:var(--off);border:1px solid var(--p-border)}
+
+/* Action bar */
+.action-bar{
+  display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;
+  padding:.75rem 1.6rem;border-bottom:1px solid var(--p-border);
+  background:rgba(0,0,12,.4);flex-shrink:0;
+}
+.act-btn{
+  font-family:var(--mono);font-size:.68rem;font-weight:500;letter-spacing:.07em;
+  text-transform:uppercase;padding:.42rem 1rem;border:none;cursor:pointer;
+  transition:background .18s,transform .12s;clip-path:polygon(6px 0%,100% 0%,calc(100% - 6px) 100%,0% 100%);
+}
+.act-btn:active{transform:scale(.97)}
+.act-btn.deploy{background:var(--p);color:#fff}
+.act-btn.deploy:hover{background:var(--p2)}
+.act-btn.restart{background:rgba(139,233,253,.15);color:var(--blue);border:1px solid rgba(139,233,253,.3)}
+.act-btn.restart:hover{background:rgba(139,233,253,.25)}
+.act-btn.stop{background:rgba(255,95,87,.12);color:var(--red);border:1px solid rgba(255,95,87,.3)}
+.act-btn.stop:hover{background:rgba(255,95,87,.22)}
+.act-btn.rollback{background:rgba(255,184,108,.1);color:var(--yellow);border:1px solid rgba(255,184,108,.3)}
+.act-btn.rollback:hover{background:rgba(255,184,108,.2)}
+.act-btn:disabled{opacity:.35;cursor:not-allowed}
+.act-msg{font-size:.68rem;color:var(--muted);margin-left:.5rem;opacity:0;transition:opacity .3s}
+.act-msg.show{opacity:1}
+
+/* Tabs */
+.tabs{display:flex;border-bottom:1px solid var(--p-border);background:rgba(0,0,12,.3);flex-shrink:0}
+.tab{
+  padding:.55rem 1.4rem;font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--off);cursor:pointer;border-bottom:2px solid transparent;
+  transition:color .15s,border-color .15s;background:none;border-top:none;border-left:none;border-right:none;
+  font-family:var(--mono);
+}
+.tab.active{color:var(--p);border-bottom-color:var(--p)}
+.tab:hover:not(.active){color:var(--white)}
+
+/* Tab panels */
+.tab-panels{flex:1;overflow:hidden;position:relative}
+.tab-panel{position:absolute;inset:0;overflow-y:auto;display:none;scrollbar-width:thin;scrollbar-color:rgba(186,49,255,.2) transparent}
+.tab-panel.active{display:block}
+
+/* Log viewer */
+.log-viewer{
+  padding:1rem 1.4rem;font-size:.72rem;line-height:1.85;
+  font-family:var(--mono);white-space:pre-wrap;word-break:break-all;
+}
+.log-line{padding:.05rem 0}
+.log-line.err{color:var(--red)}
+.log-line.warn{color:var(--yellow)}
+.log-line.ok{color:var(--green)}
+.log-line.info{color:var(--blue)}
+.log-line.default{color:var(--off)}
+.log-connecting{color:rgba(186,49,255,.6);font-style:italic;padding:1.5rem 1.4rem;font-size:.72rem}
+.log-toolbar{
+  display:flex;align-items:center;gap:1rem;padding:.5rem 1.4rem;
+  border-bottom:1px solid var(--p-border);background:rgba(0,0,12,.4);
+  font-size:.65rem;color:var(--off);flex-shrink:0;
+}
+.log-clear{background:none;border:1px solid var(--p-border);color:var(--off);font-family:var(--mono);font-size:.62rem;padding:.2rem .6rem;cursor:pointer;transition:color .2s}
+.log-clear:hover{color:var(--white)}
+.log-autoscroll{display:flex;align-items:center;gap:.4rem;cursor:pointer;user-select:none}
+.log-autoscroll input{accent-color:var(--p)}
+
+/* Deployments table */
+.dep-table{width:100%;border-collapse:collapse;font-size:.72rem}
+.dep-table th{
+  text-align:left;padding:.55rem 1.4rem;font-size:.58rem;letter-spacing:.15em;
+  text-transform:uppercase;color:rgba(186,49,255,.5);
+  border-bottom:1px solid var(--p-border);font-weight:400;background:rgba(0,0,12,.4);
+}
+.dep-table td{padding:.6rem 1.4rem;border-bottom:1px solid rgba(186,49,255,.08);color:var(--off)}
+.dep-table tr:hover td{background:rgba(186,49,255,.04)}
+.dep-id{font-size:.62rem;color:rgba(186,49,255,.5);letter-spacing:.06em}
+.dep-ts{font-size:.68rem}
+.dep-rb{
+  font-family:var(--mono);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--yellow);background:rgba(255,184,108,.1);border:1px solid rgba(255,184,108,.3);
+  padding:.2rem .55rem;cursor:pointer;transition:background .18s;
+}
+.dep-rb:hover{background:rgba(255,184,108,.2)}
+.dep-rb:disabled{opacity:.3;cursor:not-allowed}
+
+/* Env vars panel */
+.env-panel{padding:1.4rem}
+.env-toolbar{display:flex;gap:.6rem;margin-bottom:1.4rem;align-items:center}
+.env-key-in,.env-val-in{
+  background:rgba(0,0,0,.5);border:1px solid var(--p-border);color:var(--white);
+  font-family:var(--mono);font-size:.75rem;padding:.45rem .8rem;outline:none;
+  transition:border-color .2s;flex:1;
+}
+.env-key-in:focus,.env-val-in:focus{border-color:var(--p)}
+.env-add-btn{
+  font-family:var(--mono);font-size:.65rem;padding:.45rem .9rem;background:var(--p);
+  color:#fff;border:none;cursor:pointer;clip-path:polygon(5px 0%,100% 0%,calc(100% - 5px) 100%,0% 100%);
+  transition:background .18s;white-space:nowrap;
+}
+.env-add-btn:hover{background:var(--p2)}
+.env-list{list-style:none}
+.env-item{
+  display:flex;align-items:center;gap:1rem;padding:.55rem 0;
+  border-bottom:1px solid rgba(186,49,255,.08);font-size:.73rem;
+}
+.env-item:last-child{border-bottom:none}
+.env-k{color:var(--p);min-width:140px;overflow-wrap:anywhere}
+.env-v{color:var(--off);flex:1;overflow-wrap:anywhere;filter:blur(4px);transition:filter .2s}
+.env-v:hover{filter:none}
+.env-rm{
+  background:none;border:none;color:rgba(255,95,87,.5);cursor:pointer;font-size:.85rem;
+  transition:color .2s;padding:.1rem .3rem;flex-shrink:0;
+}
+.env-rm:hover{color:var(--red)}
+
+/* Empty states */
+.empty{padding:3rem 1.6rem;font-size:.78rem;color:rgba(184,168,208,.4);font-style:italic}
+
+/* Toast */
+#toast{
+  position:fixed;bottom:1.4rem;right:1.4rem;z-index:9999;
+  display:flex;flex-direction:column;gap:.5rem;pointer-events:none;
+}
+.toast-item{
+  padding:.6rem 1.1rem;font-size:.72rem;font-family:var(--mono);
+  border-left:3px solid var(--green);background:rgba(0,0,20,.95);
+  color:var(--white);animation:slideIn .25s ease;max-width:320px;
+}
+.toast-item.err{border-color:var(--red)}
+.toast-item.info{border-color:var(--blue)}
+@keyframes slideIn{from{transform:translateX(20px);opacity:0}to{transform:translateX(0);opacity:1}}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-thumb{background:rgba(186,49,255,.25);border-radius:2px}
+
+/* No project selected */
+.no-proj{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  color:rgba(184,168,208,.3);gap:.8rem;
+}
+.no-proj-logo{font-family:var(--display);font-size:4rem;font-weight:158;font-variation-settings:"ELGR" 1.2,"ELSH" 2;color:rgba(231,111,255,.15)}
+.no-proj p{font-size:.75rem;letter-spacing:.06em}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">ORBIT</div>
+    <div class="login-sub">Local Project Dashboard</div>
+    <label class="lf-label">Email</label>
+    <input class="lf-input" id="l-email" type="email" placeholder="dev@example.com" autocomplete="email"/>
+    <label class="lf-label">Password</label>
+    <input class="lf-input" id="l-pass" type="password" placeholder="••••••••" autocomplete="current-password"/>
+    <button class="lf-btn" id="l-submit">Sign in →</button>
+    <div class="lf-err" id="l-err"></div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <!-- Top bar -->
+  <div class="topbar">
+    <span class="topbar-logo">ORBIT</span>
+    <span class="topbar-sep">/</span>
+    <span class="topbar-lbl">Dashboard</span>
+    <div class="topbar-right">
+      <div class="queue-badge" id="queue-badge">
+        <span>⬡</span><span id="queue-txt">Queue: 0</span>
+      </div>
+      <span id="whoami-lbl" style="font-size:.64rem;color:var(--off)"></span>
+      <button class="tb-btn" id="logout-btn">Logout</button>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="body">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-head">Projects</div>
+      <div class="sidebar-list" id="sidebar-list">
+        <div class="empty">Loading...</div>
+      </div>
+      <button class="sb-add" id="refresh-btn">↻ Refresh</button>
+    </div>
+
+    <!-- Main -->
+    <div class="main" id="main-panel">
+      <div class="no-proj" id="no-proj">
+        <div class="no-proj-logo">ORBIT</div>
+        <p>Select a project from the sidebar</p>
+      </div>
+      <div id="proj-view" style="display:none;flex:1;flex-direction:column;overflow:hidden">
+        <!-- Project header -->
+        <div class="proj-head">
+          <div class="proj-name" id="p-name">—</div>
+          <div class="proj-meta">
+            <span id="p-status-pill" class="status-pill not_deployed">not deployed</span>
+            <a id="p-url" class="proj-url" href="#" target="_blank"></a>
+            <span id="p-repo" class="proj-repo"></span>
+            <span id="p-container" style="font-size:.65rem;color:rgba(184,168,208,.45)"></span>
+          </div>
+        </div>
+        <!-- Action bar -->
+        <div class="action-bar">
+          <button class="act-btn deploy" id="btn-deploy">▶ Deploy</button>
+          <button class="act-btn restart" id="btn-restart">↺ Restart</button>
+          <button class="act-btn stop" id="btn-stop">■ Stop</button>
+          <button class="act-btn rollback" id="btn-rollback">⬡ Rollback</button>
+          <span class="act-msg" id="act-msg"></span>
+        </div>
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab active" data-tab="logs">Logs</button>
+          <button class="tab" data-tab="deployments">Deployments</button>
+          <button class="tab" data-tab="env">Env Vars</button>
+        </div>
+        <!-- Tab panels -->
+        <div class="tab-panels">
+          <!-- Logs -->
+          <div class="tab-panel active" id="tab-logs">
+            <div class="log-toolbar">
+              <span style="color:var(--p);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase">Live Logs</span>
+              <label class="log-autoscroll"><input type="checkbox" id="autoscroll" checked/> Auto-scroll</label>
+              <button class="log-clear" id="clear-log">Clear</button>
+              <span id="log-status" style="margin-left:auto;font-size:.62rem;color:rgba(184,168,208,.4)"></span>
+            </div>
+            <div class="log-viewer" id="log-viewer"></div>
+          </div>
+          <!-- Deployments -->
+          <div class="tab-panel" id="tab-deployments">
+            <table class="dep-table">
+              <thead><tr>
+                <th>ID</th><th>Status</th><th>Env</th><th>Port</th><th>Deployed At</th><th></th>
+              </tr></thead>
+              <tbody id="dep-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+            </table>
+          </div>
+          <!-- Env vars -->
+          <div class="tab-panel" id="tab-env">
+            <div class="env-panel">
+              <div class="env-toolbar">
+                <input class="env-key-in" id="env-key" placeholder="KEY" spellcheck="false"/>
+                <input class="env-val-in" id="env-val" placeholder="value"/>
+                <button class="env-add-btn" id="env-add">Add</button>
+              </div>
+              <ul class="env-list" id="env-list"><li class="empty">No variables.</li></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '';
+let token = localStorage.getItem('orbit-token') || '';
+let email = localStorage.getItem('orbit-email') || '';
+let currentProject = null;
+let sseSource = null;
+let logLines = [];
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+function toast(msg, type='ok') {
+  const el = document.createElement('div');
+  el.className = `toast-item ${type === 'error' ? 'err' : type === 'info' ? 'info' : ''}`;
+  el.textContent = msg;
+  document.getElementById('toast').appendChild(el);
+  setTimeout(() => el.remove(), 3800);
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+async function apiReq(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(API + path, opts);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+document.getElementById('l-submit').addEventListener('click', async () => {
+  const emailVal = document.getElementById('l-email').value.trim();
+  const passVal  = document.getElementById('l-pass').value;
+  document.getElementById('l-err').textContent = '';
+  try {
+    const data = await fetch('/auth/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email: emailVal, password: passVal})
+    }).then(r=>r.json());
+    if (data.error) { document.getElementById('l-err').textContent = data.error; return; }
+    token = data.sessionToken;
+    email = emailVal;
+    localStorage.setItem('orbit-token', token);
+    localStorage.setItem('orbit-email', email);
+    showApp();
+  } catch(e) {
+    document.getElementById('l-err').textContent = 'Cannot reach daemon on :4000';
+  }
+});
+
+document.getElementById('l-pass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('l-submit').click();
+});
+
+document.getElementById('logout-btn').addEventListener('click', async () => {
+  try { await fetch('/auth/logout', {method:'POST', headers:{'Authorization':`Bearer ${token}`}}); } catch(e){}
+  token = ''; email = '';
+  localStorage.removeItem('orbit-token');
+  localStorage.removeItem('orbit-email');
+  document.getElementById('app').classList.remove('visible');
+  document.getElementById('login-screen').style.display = 'flex';
+});
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').classList.add('visible');
+  document.getElementById('whoami-lbl').textContent = email;
+  loadProjects();
+  pollQueue();
+}
+
+if (token) showApp();
+
+// ── Queue badge ──────────────────────────────────────────────────────────────
+async function pollQueue() {
+  try {
+    const data = await fetch('/api/queue').then(r=>r.json());
+    const badge = document.getElementById('queue-badge');
+    const txt   = document.getElementById('queue-txt');
+    txt.textContent = `Queue: ${data.length}`;
+    badge.className = `queue-badge${data.isBusy ? ' busy' : ''}`;
+  } catch(e){}
+  setTimeout(pollQueue, 5000);
+}
+
+// ── Sidebar ──────────────────────────────────────────────────────────────────
+let projects = [];
+
+async function loadProjects() {
+  try {
+    const data = await apiReq('GET', '/api/projects');
+    projects = data.projects || [];
+    renderSidebar();
+  } catch(e) {
+    toast('Could not load projects: ' + e.message, 'error');
+  }
+}
+
+function renderSidebar() {
+  const list = document.getElementById('sidebar-list');
+  if (!projects.length) { list.innerHTML = '<div class="empty">No projects yet.<br/>Run orbit link.</div>'; return; }
+  list.innerHTML = '';
+  for (const p of projects) {
+    const status = p.status || 'not_deployed';
+    const dotClass = status === 'running' ? 'running' : status === 'building' ? 'building' : 'stopped';
+    const item = document.createElement('div');
+    item.className = `sb-item${currentProject?.id === p.id ? ' active' : ''}`;
+    item.innerHTML = `<div class="sb-dot ${dotClass}"></div><div class="sb-name">${p.name}</div><div class="sb-env">${p.env || ''}</div>`;
+    item.addEventListener('click', () => selectProject(p));
+    list.appendChild(item);
+  }
+}
+
+document.getElementById('refresh-btn').addEventListener('click', loadProjects);
+
+// ── Project view ─────────────────────────────────────────────────────────────
+async function selectProject(p) {
+  currentProject = p;
+  renderSidebar();
+  document.getElementById('no-proj').style.display = 'none';
+  const pv = document.getElementById('proj-view');
+  pv.style.display = 'flex';
+  // Set static info
+  document.getElementById('p-name').textContent = p.name;
+  document.getElementById('p-repo').textContent = p.repository_url || '';
+  // Load live status
+  await refreshProjectStatus();
+  loadDeployments();
+  loadEnvVars();
+  startLogStream();
+}
+
+async function refreshProjectStatus() {
+  if (!currentProject) return;
+  try {
+    const data = await apiReq('GET', `/api/projects/${currentProject.id}/status`);
+    const pill = document.getElementById('p-status-pill');
+    const status = data.status || 'not_deployed';
+    pill.className = `status-pill ${status}`;
+    pill.textContent = status.replace('_', ' ');
+    const urlEl = document.getElementById('p-url');
+    if (data.url) { urlEl.href = data.url; urlEl.textContent = data.url; }
+    else { urlEl.textContent = ''; }
+    const cEl = document.getElementById('p-container');
+    cEl.textContent = data.container ? `${data.container.id} · ${data.container.status} · started ${new Date(data.container.startedAt).toLocaleTimeString()}` : '';
+    // Update current project status for sidebar
+    currentProject.status = status;
+  } catch(e) {}
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+  });
+});
+
+// ── Log streaming (SSE) ───────────────────────────────────────────────────────
+function startLogStream() {
+  if (sseSource) { sseSource.close(); sseSource = null; }
+  logLines = [];
+  const viewer = document.getElementById('log-viewer');
+  viewer.innerHTML = '<div class="log-connecting">[orbit] Connecting to log stream...</div>';
+  document.getElementById('log-status').textContent = '';
+
+  if (!currentProject) return;
+  const url = `/api/projects/${currentProject.id}/logs/stream?token=${encodeURIComponent(token)}`;
+  sseSource = new EventSource(url);
+
+  sseSource.onmessage = (e) => {
+    try {
+      const line = JSON.parse(e.data);
+      appendLog(line);
+    } catch(err) { appendLog(e.data); }
+  };
+
+  sseSource.addEventListener('end', () => {
+    appendLog('[orbit] Container stream ended.');
+    document.getElementById('log-status').textContent = 'Stream ended';
+    sseSource.close(); sseSource = null;
+  });
+
+  sseSource.onerror = () => {
+    if (sseSource?.readyState === EventSource.CLOSED) {
+      document.getElementById('log-status').textContent = 'Disconnected';
+    }
+  };
+}
+
+function stripAnsi(str) {
+  return str.replace(/\x1B\[[0-9;]*[mGKHF]/g, '');
+}
+
+function classifyLine(line) {
+  const l = line.toLowerCase();
+  if (/error|err\b|fatal|exception/i.test(l)) return 'err';
+  if (/warn|warning/i.test(l)) return 'warn';
+  if (/✓|success|started|ready|listening|running/i.test(l)) return 'ok';
+  if (/info|debug|\[orbit\]/i.test(l)) return 'info';
+  return 'default';
+}
+
+function appendLog(raw) {
+  const viewer = document.getElementById('log-viewer');
+  // Clear connecting message on first real line
+  if (viewer.querySelector('.log-connecting')) viewer.innerHTML = '';
+
+  const clean = stripAnsi(raw).trimEnd();
+  if (!clean) return;
+  logLines.push(clean);
+  if (logLines.length > 2000) logLines = logLines.slice(-1500);
+
+  const div = document.createElement('div');
+  div.className = `log-line ${classifyLine(clean)}`;
+  div.textContent = clean;
+  viewer.appendChild(div);
+
+  const autoscroll = document.getElementById('autoscroll').checked;
+  if (autoscroll) viewer.scrollTop = viewer.scrollHeight;
+}
+
+document.getElementById('clear-log').addEventListener('click', () => {
+  logLines = [];
+  document.getElementById('log-viewer').innerHTML = '';
+});
+
+// ── Deployments ───────────────────────────────────────────────────────────────
+async function loadDeployments() {
+  if (!currentProject) return;
+  try {
+    const data = await apiReq('GET', `/api/projects/${currentProject.id}/deployments`);
+    const tbody = document.getElementById('dep-tbody');
+    tbody.innerHTML = '';
+    if (!data.deployments.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">No deployments yet.</td></tr>'; return;
+    }
+    for (const d of data.deployments) {
+      const tr = document.createElement('tr');
+      const canRollback = d.status === 'stopped';
+      tr.innerHTML = `
+        <td class="dep-id">${d.container_id ? d.container_id.slice(0,10) : d.id.slice(0,8)}</td>
+        <td><span class="status-pill ${d.status}">${d.status}</span></td>
+        <td style="color:var(--muted);font-size:.65rem">${d.env || 'production'}</td>
+        <td style="color:var(--blue)">${d.port || '—'}</td>
+        <td class="dep-ts">${formatDate(d.created_at)}</td>
+        <td><button class="dep-rb" ${canRollback ? '' : 'disabled'} data-dep="${d.id}">↺ Restore</button></td>
+      `;
+      tbody.appendChild(tr);
+    }
+    tbody.querySelectorAll('.dep-rb:not([disabled])').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await doAction('rollback', 'Rolling back...');
+        loadDeployments();
+      });
+    });
+  } catch(e) { console.error(e); }
+}
+
+function formatDate(s) {
+  if (!s) return '—';
+  const d = new Date(s);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+}
+
+// ── Env vars ──────────────────────────────────────────────────────────────────
+async function loadEnvVars() {
+  if (!currentProject) return;
+  try {
+    const data = await apiReq('GET', `/api/projects/${currentProject.id}/env`);
+    const list = document.getElementById('env-list');
+    list.innerHTML = '';
+    if (!data.vars.length) { list.innerHTML = '<li class="empty">No variables. Add one above.</li>'; return; }
+    for (const v of data.vars) {
+      const li = document.createElement('li');
+      li.className = 'env-item';
+      li.innerHTML = `<span class="env-k">${v.key}</span><span class="env-v" title="hover to reveal">${v.value}</span><button class="env-rm" data-key="${v.key}">✕</button>`;
+      li.querySelector('.env-rm').addEventListener('click', async (e) => {
+        await apiReq('DELETE', `/api/projects/${currentProject.id}/env/${encodeURIComponent(e.target.dataset.key)}`, null);
+        toast(`Removed ${e.target.dataset.key}`);
+        loadEnvVars();
+      });
+      list.appendChild(li);
+    }
+  } catch(e) {}
+}
+
+document.getElementById('env-add').addEventListener('click', async () => {
+  const key = document.getElementById('env-key').value.trim();
+  const val = document.getElementById('env-val').value;
+  if (!key || !currentProject) return;
+  try {
+    await apiReq('PUT', `/api/projects/${currentProject.id}/env`, { key, value: val });
+    toast(`Set ${key}`);
+    document.getElementById('env-key').value = '';
+    document.getElementById('env-val').value = '';
+    loadEnvVars();
+  } catch(e) { toast(e.message, 'error'); }
+});
+
+// ── Action buttons ────────────────────────────────────────────────────────────
+async function doAction(action, label) {
+  if (!currentProject) return;
+  const msgEl = document.getElementById('act-msg');
+  msgEl.textContent = label;
+  msgEl.classList.add('show');
+  ['btn-deploy','btn-restart','btn-stop','btn-rollback'].forEach(id => document.getElementById(id).disabled = true);
+  try {
+    let data;
+    switch(action) {
+      case 'deploy':   data = await apiReq('POST', `/api/projects/${currentProject.id}/deploy`, {}); break;
+      case 'stop':     data = await apiReq('POST', `/api/projects/${currentProject.id}/stop`, {}); break;
+      case 'restart':  data = await apiReq('POST', `/api/projects/${currentProject.id}/restart`, {}); break;
+      case 'rollback': data = await apiReq('POST', `/api/projects/${currentProject.id}/rollback`, {}); break;
+    }
+    toast(data.message || `${action} successful`);
+    setTimeout(() => { refreshProjectStatus(); startLogStream(); }, 1200);
+  } catch(e) {
+    toast(e.message, 'error');
+  } finally {
+    ['btn-deploy','btn-restart','btn-stop','btn-rollback'].forEach(id => document.getElementById(id).disabled = false);
+    setTimeout(() => msgEl.classList.remove('show'), 3000);
+  }
+}
+
+document.getElementById('btn-deploy').addEventListener('click', () => doAction('deploy', 'Deploying...'));
+document.getElementById('btn-stop').addEventListener('click', () => doAction('stop', 'Stopping...'));
+document.getElementById('btn-restart').addEventListener('click', () => doAction('restart', 'Restarting...'));
+document.getElementById('btn-rollback').addEventListener('click', async () => { await doAction('rollback', 'Rolling back...'); loadDeployments(); });
+
+// Auto-refresh status every 15s
+setInterval(() => { if (currentProject) refreshProjectStatus(); }, 15000);
+</script>
+</body>
+</html>

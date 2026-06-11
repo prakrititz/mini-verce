@@ -68,6 +68,49 @@ export async function stopContainer(containerId: string, remove: boolean = true)
   }
 }
 
+/**
+ * Restart a container: stop it (without removing), then start it again.
+ * Returns the container ID (same as before).
+ */
+export async function restartContainer(containerId: string): Promise<void> {
+  try {
+    const container = docker.getContainer(containerId);
+    await container.restart({ t: 10 }); // 10-second grace period
+  } catch (err: any) {
+    if (err.statusCode !== 404) {
+      console.error(`Failed to restart container ${containerId}:`, err);
+      throw err;
+    }
+  }
+}
+
+/**
+ * Inspect a container and return its key stats.
+ * Returns null if the container doesn't exist.
+ */
+export async function inspectContainer(containerId: string): Promise<{
+  id: string;
+  name: string;
+  status: string;
+  startedAt: string;
+  image: string;
+} | null> {
+  try {
+    const container = docker.getContainer(containerId);
+    const info = await container.inspect();
+    return {
+      id: info.Id.slice(0, 12),
+      name: info.Name.replace(/^\//, ''),
+      status: info.State.Status,
+      startedAt: info.State.StartedAt,
+      image: info.Config.Image,
+    };
+  } catch (err: any) {
+    if (err.statusCode === 404) return null;
+    throw err;
+  }
+}
+
 export async function printContainerLogs(containerId: string, follow: boolean = false): Promise<void> {
   return new Promise(async (resolve, reject) => {
     try {
@@ -91,5 +134,37 @@ export async function printContainerLogs(containerId: string, follow: boolean = 
     } catch (err) {
       reject(err);
     }
+  });
+}
+
+/**
+ * Stream container logs via a callback — used for SSE log endpoint.
+ * Calls onChunk(text) for each log chunk, onEnd() when stream closes.
+ */
+export function streamContainerLogs(
+  containerId: string,
+  onChunk: (text: string) => void,
+  onEnd: () => void,
+  onError: (err: Error) => void
+): void {
+  const container = docker.getContainer(containerId);
+  container.logs({
+    stdout: true,
+    stderr: true,
+    tail: 80,
+    follow: true,
+    timestamps: true,
+  } as any, (err: any, stream: any) => {
+    if (err) { onError(err); return; }
+    // demux the multiplexed Docker log stream
+    const stdout = new (require('stream').PassThrough)();
+    const stderr = new (require('stream').PassThrough)();
+    docker.modem.demuxStream(stream, stdout, stderr);
+
+    const handleData = (chunk: Buffer) => onChunk(chunk.toString('utf8'));
+    stdout.on('data', handleData);
+    stderr.on('data', handleData);
+    stream.on('end', onEnd);
+    stream.on('error', onError);
   });
 }
